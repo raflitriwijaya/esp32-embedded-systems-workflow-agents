@@ -30,9 +30,11 @@ from pathlib import Path
 
 try:
     import guards
+    import gates
 except ImportError:  # guards.py sits beside this file
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import guards
+    import gates
 
 SCHEMA_VERSIONS_UNDERSTOOD = [1]
 CACHE_NAME = ".stage-cache.json"
@@ -392,6 +394,37 @@ def read_idf_version(idf: Path):
     return None, None
 
 
+def _build_log_evidence(root: Path, target: str):
+    """Warning count from an archived build log, with provenance.
+
+    The digest reported build_warnings as unknown from the day it was written,
+    because nothing captured a build log. This reads one if it exists: evidence
+    is a file on disk with a path and a timestamp, never a number the kernel
+    inferred. No log means the value stays unknown - it never becomes zero.
+    """
+    d = root / "tests" / "reports"
+    if not d.is_dir():
+        return None
+    cands = sorted(d.glob(f"build-{target}*.log"),
+                   key=lambda f: f.stat().st_mtime, reverse=True)
+    if not cands:
+        return None
+    log = cands[0]
+    try:
+        text = log.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None
+    warn = len(re.findall(r"^.*?: warning: ", text, re.M))
+    err = len(re.findall(r"^.*?: error: ", text, re.M))
+    return {
+        "warnings": warn,
+        "errors": err,
+        "source": log.relative_to(root).as_posix(),
+        "at": datetime.fromtimestamp(log.stat().st_mtime)
+              .astimezone().isoformat(timespec="seconds"),
+    }
+
+
 def _target_from_cfg(cfg, sdk_path, target, source):
     unicore = cfg.get("CONFIG_FREERTOS_UNICORE") == "y"
     hz = cfg.get("CONFIG_FREERTOS_HZ")
@@ -451,6 +484,13 @@ def collect_targets(root: Path, intent):
                           .isoformat(timespec="seconds"),
                     "warnings": None,           # not captured — see not_known
                 }
+        ev = _build_log_evidence(root, tgt)
+        if ev:
+            lb = entry.setdefault("last_build", {"artifact": None, "at": None})
+            lb["warnings"] = ev["warnings"]
+            lb["errors"] = ev["errors"]
+            lb["log"] = ev["source"]
+            lb["log_at"] = ev["at"]
         found[tgt] = entry
 
     root_sdk = root / "sdkconfig"
@@ -484,10 +524,12 @@ def build_cache(root: Path, state, state_sha) -> dict:
             unknowns.append(f"target_caps.{t['target']} (never configured or built)")
         elif t.get("freertos_hz") is None:
             unknowns.append(f"freertos_hz.{t['target']}")
-        if t.get("last_build") is None and t.get("configured"):
+        lb = t.get("last_build")
+        if lb is None and t.get("configured"):
             unknowns.append(f"last_build.{t['target']}")
-        elif t.get("last_build") and t["last_build"].get("warnings") is None:
-            unknowns.append(f"build_warnings.{t['target']} (no build log captured)")
+        elif lb and lb.get("warnings") is None:
+            unknowns.append(f"build_warnings.{t['target']} "
+                            f"(no tests/reports/build-{t['target']}*.log archived)")
     if ver is None:
         unknowns.append("idf_installed_version")
 
@@ -652,10 +694,18 @@ def render_platform(cache, stale_reason) -> list[str]:
                  f"{y(t.get('vtaskdelay_resolution_ms'))}, "
                  f"psram: {y(t.get('psram'))},")
         lb = t.get("last_build")
-        lb_s = ("null" if not lb else
-                f"{{ artifact: {y(lb.get('artifact'))}, at: {y(lb.get('at'))}, "
-                f"warnings: {y(lb.get('warnings'))} }}")
+        if not lb:
+            lb_s = "null"
+        else:
+            lb_s = (f"{{ artifact: {y(lb.get('artifact'))}, "
+                    f"at: {y(lb.get('at'))}, "
+                    f"warnings: {y(lb.get('warnings'))}, "
+                    f"errors: {y(lb.get('errors'))}, "
+                    f"log: {y(lb.get('log'))} }}")
         L.append(f"        last_build: {lb_s} }}")
+        if lb and lb.get("warnings"):
+            L.append(f"      # WARNING {t['target']}: {lb['warnings']} compiler "
+                     f"warning(s) in {lb.get('log')} - Gate 2->3 requires zero")
         if t.get("warn_suppress_on"):
             L.append(f"      # WARNING {t['target']}: warning suppression enabled "
                      f"({', '.join(t['warn_suppress_on'])}) — this is a gate finding")
@@ -698,9 +748,18 @@ def render_digest(root: Path, state, state_sha, cache, stale_reason) -> str:
 
     gate = NEXT_GATE.get(stage)
     total, gsrc = gate_criteria_total(gate) if gate else (None, None)
-    attested = sum(1 for a in (state.get("attestations") or [])
-                   if isinstance(a, dict) and a.get("gate") == gate)
     bar = meta["assumption_bar"]
+
+    # phase 4: the validator now supplies real counts. Before it existed these
+    # were null with a note; they are never faked as zero.
+    gsum, gorph, grec = None, [], None
+    try:
+        gout = evaluate_gate(root, state, gate) if gate else None
+        if gout:
+            _rows, gsum, gorph = gout
+            grec = gates.recommendation(gsum)
+    except Exception:                              # noqa: BLE001
+        gsum = None
 
     L = [HEADER,
          f"kernel: {{ project: {y(project)}, generated: {y(now_iso())}, status: OK }}",
@@ -727,11 +786,20 @@ def render_digest(root: Path, state, state_sha, cache, stale_reason) -> str:
          "next_gate:",
          f"  gate: {y(gate)}",
          f"  spec: {y(gsrc or 'SECTION1 §3 (not reachable from here)')}",
-         f"  criteria: {{ total: {y(total)}, human_attested: {y(attested)}, "
-         f"machine_checked: null, unverifiable: null }}",
-         "  note: the gate validator is not built yet (phase 2) — machine_checked "
-         "and unverifiable are not computed",
-         "  rule: a criterion that is not shown as met must never be described as met",
+         (f"  criteria: {{ total: {y((gsum or {}).get('total', total))}, "
+          f"machine_checked: {y((gsum or {}).get('machine_checked'))}, "
+          f"machine_refuted: {y((gsum or {}).get('machine_refuted'))}, "
+          f"human_attested: {y((gsum or {}).get('human_attested'))}, "
+          f"unverifiable: {y((gsum or {}).get('unverifiable'))} }}"
+          if gsum else
+          f"  criteria: {{ total: {y(total)}, machine_checked: null, "
+          f"machine_refuted: null, human_attested: null, unverifiable: null }}"),
+         (f"  recommendation: {y(grec[0])}   # {grec[1]}" if grec else
+          "  recommendation: null   # validator could not run (SECTION1 unreachable)"),
+         "  rule: a criterion that is not shown as met must never be described as "
+         "met; READY is a recommendation, PASS is the engineer's to record",
+         *( [f"  anchors_lost: {ylist(gorph)}   # SECTION1 wording may have changed"]
+            if gorph else [] ),
          "",
          "assumptions:",
          f"  open: {y(folded['assumptions_open'])}",
@@ -969,6 +1037,74 @@ def cmd_guard(root: Path) -> int:
     return 0
 
 
+def _gate_context(root: Path, state):
+    # The gate verdict must not depend on whether someone happened to run
+    # `cache` first. Build it on demand, exactly as the digest does.
+    cache = load_cache(root)
+    if cache is None:
+        try:
+            _s, sha = load_state(root)
+            cache = build_cache(root, _s, sha)
+            (root / CACHE_NAME).write_text(json.dumps(cache, indent=2, default=str),
+                                           encoding="utf-8")
+        except Exception:                          # noqa: BLE001
+            cache = {}
+    cache = cache or {}
+    gt = cache.get("ground_truth", {})
+    return {"root": root, "state": state,
+            "targets": gt.get("targets") or [],
+            "idf_version": (gt.get("idf_installed") or {}).get("version"),
+            "kconfig_symbols": None}
+
+
+def evaluate_gate(root: Path, state, gate: str):
+    """Returns (rows, summary, orphans) or None when the spec is unreachable."""
+    d = spec_dir()
+    if not d:
+        return None
+    criteria = gates.parse_criteria(d, gate)
+    if not criteria:
+        return None
+    rows, orphans = gates.evaluate(gate, criteria, _gate_context(root, state),
+                                   state.get("attestations") if state else [])
+    return rows, gates.summarise(rows), orphans
+
+
+def cmd_gate(root: Path) -> int:
+    try:
+        state, _ = load_state(root)
+    except StateError as e:
+        print(f"cannot evaluate a gate: {e}", file=sys.stderr)
+        return 2
+    stage = (state.get("current") or {}).get("stage")
+    gate = os.environ.get("STAGE_KERNEL_GATE") or NEXT_GATE.get(stage)
+    out = evaluate_gate(root, state, gate)
+    if out is None:
+        print(f"gate {gate}: SECTION1 not reachable - cannot evaluate",
+              file=sys.stderr)
+        return 2
+    rows, summary, orphans = out
+    rec, why = gates.recommendation(summary)
+    print(f"GATE {gate}   RECOMMENDATION: {rec}  ({why})")
+    print(f"  total {summary['total']} | machine-checked "
+          f"{summary['machine_checked']} | refuted {summary['machine_refuted']} "
+          f"| attested {summary['human_attested']} | unverifiable "
+          f"{summary['unverifiable']}")
+    if orphans:
+        print(f"  ! checks whose anchor matched nothing: {', '.join(orphans)} "
+              f"- SECTION1 wording may have changed")
+    for i, r in enumerate(rows, 1):
+        print(NL + f"  {i}. [{r['status']}] {r['criterion']}")
+        print(f"     {r['why']}")
+        for e in r["evidence"][:6]:
+            print(f"     evidence: {e}")
+        for h in r["hints"][:3]:
+            print(f"     hint: {h}")
+    print(NL + "  This is a recommendation, not a decision. PASS/FAIL is recorded "
+          "by the engineer as a gate_decided log event.")
+    return 0
+
+
 def main() -> int:
     # The digest is piped into an agent context across shells whose default
     # code page is not UTF-8. Mojibake in injected context is worse than no
@@ -980,12 +1116,13 @@ def main() -> int:
             pass
     ap = argparse.ArgumentParser(description="ESP32 Stage Kernel - layer 1")
     ap.add_argument("command",
-                choices=["detect", "cache", "check", "digest", "guard"])
+                choices=["detect", "cache", "check", "digest", "guard", "gate"])
     ap.add_argument("-C", "--directory", default=".", help="project root")
     a = ap.parse_args()
     root = Path(a.directory).resolve()
     return {"detect": cmd_detect, "cache": cmd_cache, "check": cmd_check,
-            "digest": cmd_digest, "guard": cmd_guard}[a.command](root)
+            "digest": cmd_digest, "guard": cmd_guard,
+            "gate": cmd_gate}[a.command](root)
 
 
 if __name__ == "__main__":
