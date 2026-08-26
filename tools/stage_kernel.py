@@ -251,7 +251,7 @@ def _ts(e):
     return None
 
 
-def check_consistency(state, folded) -> list[str]:
+def check_consistency(state, folded, root: Path = Path(".")) -> list[str]:
     """SCHEMA §10. Returns a list of human-readable failures."""
     f = []
     cur = state.get("current") or {}
@@ -295,6 +295,18 @@ def check_consistency(state, folded) -> list[str]:
     for e in _events(state, "assumption_resolved"):
         if e.get("id") not in opened:
             f.append(f"assumption_resolved {e.get('id')} was never assumption_opened")
+        # Closure integrity (phase 5). Declaring an assumption 'measured' without
+        # a measurement that exists on disk is the fabricated-evidence failure
+        # (H6) arriving through the back door: the register would show a claim
+        # closed by evidence that was never produced.
+        if e.get("resolution") == "measured":
+            ev = e.get("evidence")
+            if not ev:
+                f.append(f"{e.get('id')} resolved as 'measured' but cites no "
+                         f"evidence file")
+            elif not (root / ev).is_file() and not Path(ev).is_file():
+                f.append(f"{e.get('id')} resolved as 'measured' but its evidence "
+                         f"{ev} does not exist")
 
     sv = state.get("schema_version")
     if sv not in SCHEMA_VERSIONS_UNDERSTOOD:
@@ -507,6 +519,90 @@ def collect_targets(root: Path, intent):
     return [found[k] for k in sorted(found)]
 
 
+# ============================================================ observations (phase 5)
+
+# Runtime telemetry has no ESP-IDF-wide convention, so the framework defines one
+# rather than guessing at free-form log text. A project opts in by emitting:
+#     KERNEL_OBS <key>=<number><unit>
+# e.g. ESP_LOGI(TAG, "KERNEL_OBS stack_hwm.sensor=2345B");
+# Anything not in this form is not read as a measurement. Guessing a number out
+# of prose is exactly the fabrication this framework exists to prevent.
+OBS_LINE = re.compile(r"KERNEL_OBS\s+([A-Za-z0-9_.\-]+)\s*=\s*"
+                      r"(-?\d+(?:\.\d+)?)\s*([A-Za-z%°]*)")
+
+_UNIT = {"B": "bytes", "": None, "b": "bytes", "KB": "kilobytes",
+         "ms": "milliseconds", "us": "microseconds", "s": "seconds",
+         "dBm": "dBm", "mA": "milliamps", "uA": "microamps", "C": "celsius"}
+
+
+def _obs(claim, value, unit, source, root, target=None, at=None):
+    src = Path(source)
+    return {"claim": claim, "value": value, "unit": unit, "tier": "E0",
+            "source": (src.relative_to(root).as_posix()
+                       if root in src.parents else src.as_posix()),
+            "target": target,
+            "measured_at": at or datetime.fromtimestamp(src.stat().st_mtime)
+                                 .astimezone().isoformat(timespec="seconds")}
+
+
+def _observe_size(root: Path, target: str):
+    """Flash and RAM footprint from `idf.py size --format json2`."""
+    out = []
+    for p in sorted((root / "tests" / "reports").glob(f"size-{target}*.json"),
+                    key=lambda f: f.stat().st_mtime, reverse=True)[:1]:
+        try:
+            d = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(d.get("total_size"), int):
+            out.append(_obs("image.total_size", d["total_size"], "bytes", p, root, target))
+        for layer in d.get("layout") or []:
+            name = str(layer.get("name", "")).lower().replace(" ", "_")
+            for field in ("used", "free", "total"):
+                v = layer.get(field)
+                if isinstance(v, int) and v:
+                    out.append(_obs(f"{name}.{field}", v, "bytes", p, root, target))
+    return out
+
+
+def _observe_telemetry(root: Path, target: str):
+    """Runtime measurements from an archived monitor log.
+
+    UNVERIFIED AGAINST HARDWARE: no device has produced a log for this parser
+    yet. It is exercised against synthetic input only, and that limitation is
+    recorded rather than hidden.
+    """
+    out = []
+    d = root / "tests" / "reports"
+    if not d.is_dir():
+        return out
+    for p in sorted(list(d.glob(f"monitor-{target}*.log")) + list(d.glob("run-*.log")),
+                    key=lambda f: f.stat().st_mtime, reverse=True)[:2]:
+        try:
+            text = p.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        seen = {}
+        for m in OBS_LINE.finditer(text):
+            key, raw, unit = m.group(1), m.group(2), m.group(3)
+            val = float(raw) if "." in raw else int(raw)
+            seen[key] = (val, _UNIT.get(unit, unit or None))
+        for key, (val, unit) in seen.items():
+            out.append(_obs(key, val, unit, p, root, target))
+    return out
+
+
+def collect_observations(root: Path, targets):
+    out = []
+    for t in targets:
+        if not t.get("configured"):
+            continue
+        tgt = t["target"]
+        out += _observe_size(root, tgt)
+        out += _observe_telemetry(root, tgt)
+    return out
+
+
 def build_cache(root: Path, state, state_sha) -> dict:
     cur = (state or {}).get("current") or {}
     intent = (cur.get("intent") or {})
@@ -548,7 +644,7 @@ def build_cache(root: Path, state, state_sha) -> dict:
             "idf_pin_match": (ver == pinned) if (ver and pinned) else None,
             "targets": targets,
         },
-        "observations": [],       # populated by the closure loop in phase 5
+        "observations": collect_observations(root, targets),
         "unknowns": unknowns,
         "derived": {
             "assumptions_open": open_n,
@@ -717,7 +813,7 @@ def render_digest(root: Path, state, state_sha, cache, stale_reason) -> str:
     stage = cur.get("stage")
     meta = STAGES.get(stage)
     folded = fold(state)
-    failures = check_consistency(state, folded)
+    failures = check_consistency(state, folded, root)
 
     sv = state.get("schema_version")
     project = (state.get("project") or {}).get("id")
@@ -830,6 +926,19 @@ def render_digest(root: Path, state, state_sha, cache, stale_reason) -> str:
                  "asserting them")
     L.append("")
 
+    obs = (cache or {}).get("observations") or []
+    if obs:
+        keys = sorted({o.get("claim") for o in obs if o.get("claim")})
+        srcs = sorted({o.get("source") for o in obs if o.get("source")})
+        L.append("observations:")
+        L.append(f"  count: {len(obs)}   # tier E0, each with a source and a timestamp")
+        L.append(f"  claims: {ylist(keys[:12])}"
+                 + (f"   # +{len(keys) - 12} more" if len(keys) > 12 else ""))
+        L.append(f"  sources: {ylist(srcs[:4])}")
+        L.append("  rule: read a value from .stage-cache.json - never restate one "
+                 "from memory, and never round it")
+        L.append("")
+
     unknowns = (cache or {}).get("unknowns") or []
     L.append("not_known:")
     L.append(f"  items: {ylist(unknowns) if unknowns else '[]'}")
@@ -882,7 +991,7 @@ def cmd_check(root: Path) -> int:
     except StateError as e:
         print(str(e), file=sys.stderr)
         return 2
-    failures = check_consistency(state, fold(state))
+    failures = check_consistency(state, fold(state), root)
     if not failures:
         print("stage-state.yaml is consistent")
         return 0

@@ -103,6 +103,12 @@ if ($isBuild -and -not $NoArchive) {
     $log = Join-Path $dir ("build-" + $t + "-" + (Get-Date -Format 'yyyy-MM-dd') + ".log")
 }
 
+# Same PowerShell 5.1 hazard as the export above, and the one that matters most:
+# CMake and the toolchain write progress and warnings to stderr, so under
+# 'Stop' virtually every real build would abort with NativeCommandError at exit
+# code 0. Native command success is $LASTEXITCODE, never $?.
+$ErrorActionPreference = 'Continue'
+
 Push-Location $proj
 try {
     if ($log) {
@@ -112,7 +118,8 @@ try {
         & idf.py @argList
     }
     $code = $LASTEXITCODE
-} finally { Pop-Location }
+} finally { Pop-Location; $ErrorActionPreference = 'Stop' }
+if ($null -eq $code) { $code = 0 }
 
 if ($log) {
     # Refresh the derived cache so the digest reflects this run immediately.

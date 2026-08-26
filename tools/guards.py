@@ -237,6 +237,44 @@ def g_arduino(path, text, ctx):
     return out
 
 
+# Units that mark a line as asserting a measurement rather than a design intent.
+_MEASURED_UNIT = (r"(?:bytes?|B|KB|kB|MiB|ms|us|µs|s|dBm|mA|uA|A|MHz|kHz|Hz|"
+                  r"%|°C|degC|hours?|h)")
+# Anything that shows where a number came from.
+_CITATION = re.compile(
+    r"(tests/reports/|\.log\b|\.json\b|\.csv\b|ASM-|TRACE-|TASK-|REQ-|"
+    r"datasheet|measured on|per SECTION|@[0-9a-f]{4,}|KERNEL_OBS)", re.I)
+# Ranges, targets and budgets are intentions, not measurements.
+_INTENT = re.compile(r"(target|budget|shall|must|requirement|limit|threshold|"
+                     r"at least|no more than|maximum|minimum|range|TBD|e\.g\.|"
+                     r"example|template|<[A-Za-z_ ]+>)", re.I)
+
+
+def g_numeric_claim(path, text, ctx):
+    """A figure with a unit, stated as fact, with nothing showing where it came from.
+
+    Strict level only. This is the textual counterpart of the closure loop: a
+    measurement that never happened reads exactly like one that did, and the
+    difference is a citation.
+    """
+    out = []
+    for i, line in enumerate(text.splitlines(), 1):
+        st = line.strip()
+        if not st or st.startswith(("#", ">", "|", "-", "*", "`")):
+            continue                       # headings, tables, lists, quotes, code
+        if not re.search(rf"\b\d[\d.,]*\s*{_MEASURED_UNIT}\b", st):
+            continue
+        if _CITATION.search(st) or _INTENT.search(st):
+            continue
+        out.append(_f("numeric-claim",
+                      "a figure with a unit is stated as fact with no citation. "
+                      "Cite the log, report, or datasheet it came from, or mark "
+                      "it as an assumption (ASM-) until it is measured.",
+                      "SECTION1 sec.5 evidence tiers; SECTION5 RL-ESP-06",
+                      i))
+    return out[:6]
+
+
 # ============================================================ registry
 
 def _is_source(path):
@@ -247,6 +285,18 @@ def _is_source(path):
     if any(seg.startswith(SKIP_PREFIXES) for seg in segs):
         return False
     return p.lower().endswith(SOURCE_EXT)
+
+
+def _is_claim_doc(path):
+    """Documents that feed gate criteria. Deliberately excludes tests/reports/,
+    which holds the evidence itself, and this framework's own specs."""
+    p = path.replace(chr(92), "/")
+    segs = p.split("/")
+    if SKIP_SEGMENTS.intersection(segs) or "reports" in segs:
+        return False
+    if not p.lower().endswith(".md"):
+        return False
+    return any(seg in segs for seg in ("design", "hardware", "reliability", "gates"))
 
 
 def _is_sdkconfig(path):
@@ -262,8 +312,8 @@ REGISTRY = [
     ("warn-suppress", "guard",    _is_sdkconfig, g_warn_suppress,  True),
     ("legacy-driver", "guard",    _is_source,    g_legacy_driver,  True),
     ("arduino-ban",   "guard",    _is_source,    g_arduino,        True),
+    ("numeric-claim", "strict",   _is_claim_doc, g_numeric_claim,  True),
     ("evidence-path", "strict",   None,          None,             False),
-    ("numeric-claim", "strict",   None,          None,             False),
 ]
 
 LEVEL_RANK = {"advisory": 0, "guard": 1, "strict": 2}
