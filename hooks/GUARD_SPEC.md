@@ -53,7 +53,7 @@ A denial is overridable through the normal permission flow. The reason text says
 | `warn-suppress` | guard | `sdkconfig*` | ✅ |
 | `legacy-driver` | guard | C/C++ sources | ✅ |
 | `arduino-ban` | guard | C/C++ sources | ✅ |
-| `numeric-claim` | strict | markdown under `design/`, `hardware/`, `reliability/`, `gates/` | ✅ |
+| `numeric-claim` | strict | markdown under `design/`, `hardware/`, `reliability/`, `tracking/pic-audit/dossiers/` | ✅ |
 | `evidence-path` | strict | — | ❌ not built |
 
 `stage_kernel.py` imports `guards.implemented_guards()` for the digest's `active_guards`, so an unimplemented guard can never be advertised as active. This is invariant I2 applied to the framework itself.
@@ -119,6 +119,7 @@ Comments are blanked before code scans, so a legacy call mentioned in prose does
 | Situation | Behaviour |
 |---|---|
 | A guard raises | That guard yields a finding saying it raised, and that the file was **not checked** — silence is never reported as cleanliness |
+| The payload will not parse | Reported as `additionalContext` saying the file was NOT checked. A leading UTF-8 BOM is stripped first: PowerShell's `Out-File -Encoding utf8` emits one, and it silently broke `json.loads`. The original code returned 0 with no output, which is indistinguishable from a clean file |
 | The guard runner raises | `additionalContext` states the file was NOT checked; the write is allowed |
 | No `stage-state.yaml` | Enforcement defaults to `advisory` — warn, never deny |
 | Not an ESP-IDF project, or `.no-stage-governance` | No output |
@@ -158,6 +159,8 @@ A guard that silently never fires is worse than no guard, and would be indisting
 [ ] enforcement advisory: findings surfaced, nothing denied -> allow
 [ ] digest active_guards contains no unimplemented guard
 [ ] numeric-claim: bare measurement fires; target/budget/range/citation do not
+[ ] the PowerShell wrapper delivers real stdin end to end (not only the python layer)
+[ ] a BOM-prefixed payload is parsed, not silently dropped
 ```
 
 Driving a guard manually:

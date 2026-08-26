@@ -1,6 +1,6 @@
 ---
 name: gate-dossier
-description: Assemble a stage-gate readiness dossier for an ESP32 project - machine verdicts, adversary objections, and platform ground truth - and write it to gates/. Produces a READY / NOT-READY recommendation only; the gate decision stays with the engineer.
+description: Assemble a stage-gate readiness dossier for an ESP32 project - machine verdicts, adversary objections, and platform ground truth - and write it to tracking/pic-audit/dossiers/. Produces a READY / NOT-READY recommendation only; the gate decision stays with the engineer.
 argument-hint: [gate]
 disable-model-invocation: true
 allowed-tools: Bash(python ${CLAUDE_SKILL_DIR}/../../tools/stage_kernel.py *) Read Grep Glob
@@ -63,7 +63,7 @@ If it raises zero objections, record that as `raised: 0` and note it plainly. A 
 
 ## Step 4 — Write the dossier
 
-Write to `gates/gate<from><to>-dossier-<YYYY-MM-DD>.md`, using the date from the machine output rather than a guessed one:
+Write to `tracking/pic-audit/dossiers/gate<from><to>-dossier-<YYYY-MM-DD>.md`, using the date from the machine output rather than a guessed one:
 
 ```markdown
 # Gate <from>-><to> Readiness Dossier

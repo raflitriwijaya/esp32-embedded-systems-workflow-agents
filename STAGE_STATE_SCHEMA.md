@@ -99,7 +99,7 @@ attestations:                          # only criteria a machine cannot evaluate
     attested_by: <engineer>
     date: 2026-08-27
     method: agent-adversary
-    dossier: gates/gate23-dossier-2026-08-27.md
+    dossier: tracking/pic-audit/dossiers/gate23-dossier-2026-08-27.md
     objections: { raised: 4, accepted: 3, rejected: 1 }
     evidence: design/architecture/system-architecture.md@a3f1c2
     supersedes: null
@@ -118,7 +118,7 @@ log:                                   # append-only — existing entries are ne
       id: ATT-0003, criterion: PIC-S2-05, by: <engineer> }
   - { ts: 2026-08-28T09:00+07:00, event: gate_decided,
       gate: "2->3", decision: PASS, by: <engineer>,
-      unmet: [], dossier: gates/gate23-dossier-2026-08-27.md }
+      unmet: [], dossier: tracking/pic-audit/dossiers/gate23-dossier-2026-08-27.md }
 ```
 
 ### 4.1 Field reference
@@ -174,7 +174,7 @@ An attestation records a human judgement on a gate criterion that no machine can
 | `attested_by` | Yes | Named individual |
 | `date` | Yes | ISO 8601 date |
 | `method` | Yes | See §6.1 |
-| `dossier` | Yes when `method: agent-adversary` | Path under `gates/` |
+| `dossier` | Yes when `method: agent-adversary` | Path under `tracking/pic-audit/dossiers/` |
 | `objections` | Yes when `method: agent-adversary` | `{raised, accepted, rejected}` |
 | `evidence` | Yes | Artifact path plus content hash frozen at attestation time (`path@hash`) |
 | `supersedes` | Yes (may be `null`) | ID of the attestation this replaces |
@@ -360,7 +360,7 @@ See `templates/stage-state.template.yaml` for a ready-to-copy file.
 | **SECTION 1** | Owns the stage definitions, gate checklists, Assumption Register format, and precision bar. This schema stores decisions *about* those; it never copies them |
 | **SECTION 4** | Owns trace records, tasks, issues, and debt. `current.registers` points at them |
 | **SECTION 6** | Owns PIC audit criteria and sign-off authority. Where engineer and PIC are the same person, the sign-off record collapses into `attestations[]` plus the `gate_decided` event — it is not duplicated under `tracking/pic-audit/sign-offs/` |
-| **SECTION 7** | Owns the repository location map. `stage-state.yaml` and `.stage-cache.json` are listed at project root; gate dossiers live under `gates/` |
+| **SECTION 7** | Owns the repository location map. `stage-state.yaml` and `.stage-cache.json` are listed at project root; gate dossiers live under `tracking/pic-audit/dossiers/` |
 
 ---
 

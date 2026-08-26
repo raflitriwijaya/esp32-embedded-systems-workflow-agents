@@ -984,9 +984,20 @@ def _render_findings(items) -> str:
 
 def cmd_guard(root: Path) -> int:
     """PreToolUse guard. Reads the hook event on stdin, decides, exits 0."""
+    raw = sys.stdin.read() or ""
+    raw = raw.lstrip("﻿").strip()            # PowerShell writes a UTF-8 BOM
+    if not raw:
+        return 0
     try:
-        ev = json.loads(sys.stdin.read() or "{}")
-    except ValueError:
+        ev = json.loads(raw)
+    except ValueError as exc:
+        # Silence here would be indistinguishable from "checked and clean" - the
+        # exact failure this framework refuses. Say the file was not checked.
+        print(json.dumps({"hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "additionalContext": f"[stage-kernel] guard could not parse the hook "
+                                 f"payload ({exc}). This file was NOT checked - do "
+                                 f"not read the absence of findings as clean."}}))
         return 0
     ti = ev.get("tool_input") or {}
 

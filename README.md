@@ -24,7 +24,31 @@ The directory structure mirrors the install target, so installation is a copy or
 | `hooks/` | referenced from `~/.claude/settings.json` | `SessionStart` digest, `PreToolUse` guards |
 | `tools/` | invoked by hooks and skills | Cache generator, log fold, validators |
 
-**Install scope: user level.** The framework is installed once at `~/.claude/` and applies to every ESP32 project. Project-specific state lives in each project's own `stage-state.yaml`.
+**Install scope: user level.** Installed once at `~/.claude/` and applies to every ESP32 project. Project-specific state lives in each project's own `stage-state.yaml`.
+
+### Installing
+
+Four **directory junctions**, so the installed framework and the repository never drift apart — a copy would let the two diverge silently, which is the failure this framework exists to prevent:
+
+```powershell
+New-Item -ItemType Junction "$env:USERPROFILE\.claude\tools"  -Target "<repo>\tools"
+New-Item -ItemType Junction "$env:USERPROFILE\.claude\hooks"  -Target "<repo>\hooks"
+New-Item -ItemType Junction "$env:USERPROFILE\.claude\agents" -Target "<repo>\agents"
+New-Item -ItemType Junction "$env:USERPROFILE\.claude\skills\gate-dossier" -Target "<repo>\skills\gate-dossier"
+```
+
+Junctions need no elevation. Then register the two hooks and the spec path in `~/.claude/settings.json`:
+
+```json
+{ "hooks": {
+    "SessionStart": [ { "hooks": [ { "type": "command",
+      "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"%USERPROFILE%\.claude\hooks\session_start_digest.ps1\"" } ] } ],
+    "PreToolUse":   [ { "matcher": "Write|Edit", "hooks": [ { "type": "command",
+      "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"%USERPROFILE%\.claude\hooks\pre_tool_use_guard.ps1\"" } ] } ] },
+  "env": { "EMBEDDED_WORKFLOW_SPEC_DIR": "<path to>\\workflow-iot" } }
+```
+
+`EMBEDDED_WORKFLOW_SPEC_DIR` matters because the gate validator parses criterion counts from `WORKFLOW_SECTION1.md` at run time rather than caching them. Without it the counts fall back to `null` — correct, but less useful.
 
 ---
 

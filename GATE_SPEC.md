@@ -1,7 +1,7 @@
 # GATE_SPEC — Gate Evaluation and Dossier (Phase 4)
 
 **Validator:** `tools/gates.py` + `tools/stage_kernel.py gate` · **Adversary:** `agents/gate-adversary.md`
-**Output location:** `gates/gate<from><to>-dossier-<YYYY-MM-DD>.md`
+**Output location:** `tracking/pic-audit/dossiers/gate<from><to>-dossier-<YYYY-MM-DD>.md`
 
 ---
 
@@ -107,7 +107,7 @@ SECTION 6 assumes a PIC distinct from the author. Where they are the same person
 
 ## 7. Dossier
 
-Assembled from three parts and written to `gates/gate<from><to>-dossier-<YYYY-MM-DD>.md`:
+Assembled from three parts and written to `tracking/pic-audit/dossiers/gate<from><to>-dossier-<YYYY-MM-DD>.md`:
 
 | Part | Source |
 |---|---|
@@ -147,7 +147,7 @@ Orchestration is the `/gate-dossier` skill (`skills/gate-dossier/SKILL.md`):
 | 1 | `stage_kernel.py gate` — machine verdicts |
 | 2 | `stage_kernel.py digest` — platform ground truth and the `not_known` list |
 | 3 | Spawn `gate-adversary`, pointed at the `UNVERIFIABLE` criteria |
-| 4 | Write `gates/gate<from><to>-dossier-<YYYY-MM-DD>.md` |
+| 4 | Write `tracking/pic-audit/dossiers/gate<from><to>-dossier-<YYYY-MM-DD>.md` |
 | 5 | Hand back — recommendation, refutations, objection count, dossier path |
 
 It is `disable-model-invocation: true`: it writes a file and drives a review, so the engineer controls when it runs. It is deliberately **not** forked — the orchestration stays in the main session where the engineer can see it, and the heavy SECTION 1 reading happens inside the validator rather than in context.

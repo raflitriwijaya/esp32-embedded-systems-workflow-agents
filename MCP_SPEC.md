@@ -217,3 +217,34 @@ claude mcp add --transport stdio esp-idf -- powershell -NoProfile -ExecutionPoli
 ```
 
 Both commands write to the user's Claude configuration. Neither is run by the framework on its own.
+
+
+---
+
+## 8. Registration on a real project — and one gap left open
+
+A minimal ESP32-S3 project (`esp32-led-blink`) was created, built, and used to register the Tools server at **local** scope from inside the project directory, with an explicit `-ProjectDir`.
+
+### Two launcher defects fixed on the way
+
+| Defect | Detail |
+|---|---|
+| Cold start took 7.9 s | `export.ps1` re-derives the whole environment through `activate.py` on every launch. The exported variables are now cached in `tools/.idf_env_cache.json`, keyed on IDF path and version and discarded if any cached PATH entry has vanished. Warm start: **3.1 s** |
+| Cached replay hit a stale shim | Restoring the cache restores *variables*, but `idf.py` is a PowerShell **function** defined by `export.ps1`. Without the function, `& idf.py` fell through to PATH and reached a leftover `idf-exe 1.0.3` shim from an older `.espressif` install — which accepts the arguments, exits 0 after a second, and looks exactly like a crashed server. The launcher now invokes `<venv python> <IDF>	ools\idf.py` by path, removing both the shim and the dependency on the function |
+
+The second is the same trap that makes a bare `idf.py --version` report `v1.0.3` instead of the ESP-IDF version. It is worth knowing about independently of MCP.
+
+### The gap
+
+Under a real MCP client the server is healthy:
+
+```
+initialize -> serverInfo {"name": "ESP-IDF", "version": "1.29.1"}
+tools      -> build_project, clean_project, flash_project, set_target
+resources  -> project://config, project://devices, project://status
+non-JSON stdout lines: 0        time to first response: 3.1 s
+```
+
+`claude mcp list` nonetheless reports `CONNECTION_CLOSED`. Everything testable from the server side is verified; the discrepancy is client-side, and Claude Code writes no MCP client log to disk that would settle it. Raising `MCP_TIMEOUT` did not change the result.
+
+**Status: registered, server verified functional, health check disagreeing.** The honest next test is an interactive session opened in `esp32-led-blink` — the session's own connection path may differ from the CLI health probe. Recorded here rather than left as a quiet failure or written up as working.

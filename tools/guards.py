@@ -296,7 +296,8 @@ def _is_claim_doc(path):
         return False
     if not p.lower().endswith(".md"):
         return False
-    return any(seg in segs for seg in ("design", "hardware", "reliability", "gates"))
+    return any(seg in segs for seg in ("design", "hardware", "reliability",
+                                      "pic-audit"))
 
 
 def _is_sdkconfig(path):
