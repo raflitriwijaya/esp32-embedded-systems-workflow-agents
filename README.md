@@ -16,10 +16,11 @@ The directory structure mirrors the install target, so installation is a copy or
 |---|---|---|
 | `STAGE_STATE_SCHEMA.md` | — (reference only) | Specification of `stage-state.yaml` and `.stage-cache.json` |
 | `MCP_SPEC.md` | — (reference only) | Evidence wiring: the two MCP servers, the Bash allowlist, build-log capture |
+| `spec-defects.yaml` | — (data, read by the digest) | Verified defects in the workflow specification itself |
 | `GATE_SPEC.md` | — (reference only) | Gate verdicts, the adversary, and the dossier |
 | `CLOSURE_SPEC.md` | — (reference only) | Claim closure, observation sources, the `KERNEL_OBS` convention |
 | `templates/` | — (copied per project) | `stage-state.template.yaml` — 11-line bootstrap for a new project |
-| `skills/` | `~/.claude/skills/` | `gate-dossier` - assembles a gate readiness dossier |
+| `skills/` | `~/.claude/skills/` | `gate-dossier` - gate readiness dossier · `design-review` - SECTION 2 sec.8 review |
 | `agents/` | `~/.claude/agents/` | `gate-adversary` - read-only, refutes gate readiness |
 | `hooks/` | referenced from `~/.claude/settings.json` | `SessionStart` digest, `PreToolUse` guards |
 | `tools/` | invoked by hooks and skills | Cache generator, log fold, validators |
@@ -133,6 +134,30 @@ This table records the *current* baseline for the framework's own calibration. P
 | 4 | Gate validator, adversary subagent, dossier skill - `GATE_SPEC.md`, `tools/gates.py`, `agents/gate-adversary.md`, `skills/gate-dossier/` | Done |
 
 **This is the whole agent.** Phases 0-4 implement human-in-the-loop support for SECTION 1: stage awareness, anti-hallucination guards, gate readiness with an adversary, and a decision boundary the agent cannot cross.
+
+### Section 2 — the design phase
+
+The same three layers, pointed at design artifacts instead of stage governance. No new machinery.
+
+| Layer | Question | Section 1 | Section 2 |
+|---|---|---|---|
+| Context — digest | *Where does everything live?* | stage, RSMR bar, `not_known` | register pointers, `spec_defects`, design shape checks |
+| Enforcement — guards | *What may be claimed?* | `.c` / `.h` sources | `.md` design documents |
+| Review — validator | *Are we ready?* | Gate 1→2, 2→3 | SECTION 2 sec.8, 44 items |
+
+**Context.** SECTION 7 sec.4.1 already fixes the repository layout; SECTION 2 mandates the artifacts but never references it. `current.registers` is the bridge, and every shape check is blocked without it. `tools/design_check.py` then establishes what shape can establish: ID format and uniqueness, the seven columns of sec.2.1, the five fields and nine bracket categories of sec.3.1, and referential integrity — a `REQ-` citation that resolves to nothing, a requirement no artifact references, an `ASM-` with no register entry.
+
+`spec-defects.yaml` is the part with no precedent in Section 1. Guards check whether output is wrong; nothing checks whether output is **faithful to a defective example**. The specification writes `stack 4096 words` forty-three lines below its own rule that ESP-IDF takes bytes. An agent copying that is obeying, and is wrong. Thirteen defects were verified independently — computed where arithmetic was involved, checked against the installed ESP-IDF tree where platform reality was — and one further claim was investigated and **rejected as false**, which is why the register carries a `rejected:` section. The register is a curated fact list, exactly what invariant I2 warns against, so it stores the hash of the specification it was verified against and reports itself stale when that changes.
+
+**Enforcement.** `numeric-claim` had four holes, each demonstrated by test before being closed: it skipped every line beginning with `|` — blinding it to the sec.2.1 Measurable Target column, the highest-risk surface in the chapter; it treated `REQ-` as a citation, though a requirement is what a number must satisfy rather than where it came from; it carried no electrical or mechanical units, so every hard number in the hardware bring-up checklist passed; and it denied only at `strict`, which is S4–S5, while the design phase runs at S1–S3.
+
+The fix for the first hole is **not** to stop skipping tables. Design tables legitimately carry contract and target statements. Instead the guard parses the table and inspects only measurement columns — and treats the Assumption column as provenance, because sec.2.1 says it is. Testing against the specification's own worked example caught a cell-wise check flagging a correctly-filled row.
+
+The exemptions must be preserved exactly. `Blocking: <= 10 ms` is a contract, not a measurement; a target, a budget, a limit and a range are intentions. A guard that fires on those fires on most of a well-written document, and gets switched off. **A guard's value is bounded by whether it stays on.**
+
+**Review.** SECTION 2 sec.8 is not a gate: it runs *inside* a stage, and its FAIL edge returns to the Measurable Requirements Table rather than to the artifact that failed — so that table is re-edited each cycle, and the never-renumbered invariant depends on snapshotting it. The four verdicts, anchor-to-text discipline, adversary and dossier transfer unchanged; only a second anchor surface and a `design_review_decided` event are new.
+
+Its most valuable output needs no checks at all: of 44 items, **18 make a universal claim** — *every*, *all*, *each* — over a set no file enumerates. A review reporting 41 unverifiable criteria has shown the engineer exactly where confidence rested on feeling. Two items are `MACHINE_REFUTED` today: both cite `CLAUDE.md sec.2` and `sec.5`, and that file has no numbered sections.
 
 ### Deliberately out of scope
 

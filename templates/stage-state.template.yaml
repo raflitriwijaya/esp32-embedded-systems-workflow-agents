@@ -34,7 +34,17 @@ current:
     targets: [esp32s3]             # targets this project intends to support
     idf_pinned: "6.0.2"            # version the docs pin; cache compares vs installed
   registers:                       # pointers, never copies
-    assumptions: design/requirements/assumption-register.md
+    # Paths come from SECTION7 sec.4.1, which already fixes the layout.
+    # SECTION2 never references it, so these pointers are the bridge that lets
+    # the design shape checks find anything at all. Uncomment as artifacts appear.
+    assumptions:  design/requirements/assumption-register.md
+    # requirements: design/requirements/REQ-register.md
+    # decisions:    design/decisions/
+    # icd:          design/icd/
+    # schema:       design/schema/
+    # connectivity: design/connectivity/qos-register.md
+    # errorcodes:   design/error-codes/
+    # architecture: design/architecture/
     # debt:   tracking/debt/
     # tasks:  tracking/tasks/
     # issues: tracking/issues/
@@ -53,6 +63,8 @@ log:
 # --- Event vocabulary (SCHEMA §7), for reference while authoring -------------
 #   stage_entered           stage, by, from
 #   gate_decided            gate, decision(PASS|FAIL), by, unmet[], dossier
+#   design_review_decided   outcome(ACCEPTED|REWORK), by, unmet[], dossier
+#                           SECTION2 sec.8 - runs INSIDE a stage, not at a gate
 #   assumption_opened       id, origin(agent-claim|human|field-incident), tier,
 #                           subject, deadline
 #   assumption_resolved     id, resolution(measured|confirmed|designed-out|

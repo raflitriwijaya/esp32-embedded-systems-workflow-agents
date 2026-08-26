@@ -251,3 +251,130 @@ def recommendation(summary):
         return "NOT-READY", (f"{summary['unverifiable']} criterion(s) neither "
                              f"machine-checked nor attested")
     return "READY", "every criterion is machine-checked or attested"
+
+
+# ============================================================ design review (sec.8)
+#
+# SECTION2 sec.8 is NOT a SECTION1 gate. It runs INSIDE a stage, and its FAIL
+# edge returns to the Measurable Requirements Table rather than to the artifact
+# that failed. The machinery transfers unchanged - four verdicts, anchor-to-text,
+# the adversary, the dossier - but the vocabulary and the log event differ.
+#
+# Its most valuable output is the UNVERIFIABLE count, and that needs no checks at
+# all: of 44 items, 17 make universal claims ("every", "all", "each") over sets
+# no file enumerates. Reporting that honestly is the product.
+
+DESIGN_REVIEW = "design-review"
+
+
+def _dc(root, state, which):
+    """Reuse a design_check finding as a sec.8 verdict."""
+    import design_check
+    reg = ((state or {}).get("current") or {}).get("registers") or {}
+    for fn in design_check.CHECKS:
+        if fn.__name__ == which:
+            r = fn(root, state, reg)
+            return _r({design_check.VERIFIED: VERIFIED,
+                       design_check.REFUTED: REFUTED,
+                       design_check.SKIPPED: UNVERIFIABLE}[r["status"]],
+                      r["why"], evidence=r["evidence"])
+    return _r(UNVERIFIABLE, f"design check {which} not found")
+
+
+def d_req_table(ctx):
+    return _dc(ctx["root"], ctx.get("state"), "c_req_table_shape")
+
+
+def d_decisions(ctx):
+    return _dc(ctx["root"], ctx.get("state"), "c_decision_records")
+
+
+def d_orphans(ctx):
+    return _dc(ctx["root"], ctx.get("state"), "c_orphan_requirements")
+
+
+def d_assumptions_owned(ctx):
+    return c_assumptions_owned(ctx)
+
+
+def d_claudemd_section(ctx):
+    """sec.8 cites CLAUDE.md sec.2 / sec.5. Check the file actually has them.
+
+    This is REFUTED today and is the cheapest demonstration that a review can
+    settle a criterion against the project rather than merely record an opinion.
+    """
+    root = ctx["root"]
+    cands = [root / "CLAUDE.md"]
+    spec = ctx.get("spec_dir")
+    if spec:
+        cands += [Path(spec).parent / "CLAUDE.md", Path(spec) / "CLAUDE.md"]
+    for f in cands:
+        if Path(f).is_file():
+            text = Path(f).read_text(encoding="utf-8", errors="ignore")
+            heads = re.findall(r"^#{1,3}\s*\d+\.|^\s*§\s*\d+", text, re.M)
+            if heads:
+                return _r(VERIFIED,
+                          f"{Path(f).name} carries {len(heads)} numbered section(s)")
+            return _r(REFUTED,
+                      f"{Path(f).name} has no numbered sections, so this "
+                      f"criterion cites an authority that does not exist",
+                      evidence=[f"{Path(f).name}: headings are "
+                                f"[SYSTEM]/[CONSTRAINTS] markers, not numbered"])
+    return _r(UNVERIFIABLE, "CLAUDE.md not reachable from here")
+
+
+DESIGN_CHECKS = [
+    {"id": "req-table-format", "gate": DESIGN_REVIEW,
+     "anchor": r"requirements in measurable-table format", "fn": d_req_table},
+    {"id": "assumptions-owned-dr", "gate": DESIGN_REVIEW,
+     "anchor": r"assumption has owner \+ deadline", "fn": d_assumptions_owned},
+    {"id": "req-drives-artifact", "gate": DESIGN_REVIEW,
+     "anchor": r"requirement drives at least one downstream artifact",
+     "fn": d_orphans},
+    {"id": "decision-format", "gate": DESIGN_REVIEW,
+     "anchor": r"platform decision documented in .*3\.1 format",
+     "fn": d_decisions},
+    {"id": "claudemd-conventions", "gate": DESIGN_REVIEW,
+     "anchor": r"Platform conventions from CLAUDE\.md", "fn": d_claudemd_section},
+    {"id": "claudemd-connectivity", "gate": DESIGN_REVIEW,
+     "anchor": r"Connectivity template from CLAUDE\.md", "fn": d_claudemd_section},
+]
+
+
+def parse_design_review(spec_dir: Path):
+    """Checklist items from SECTION2 sec.8. Anchored to text, like the gates."""
+    f = Path(spec_dir) / "WORKFLOW_SECTION2.md"
+    try:
+        text = f.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None
+    m = re.search(r"^##\s+8\.", text, re.M)
+    if not m:
+        return None
+    block_text = text[m.end():]
+    items = []
+    for ln in block_text.splitlines():
+        st = ln.strip()
+        # "Target Stage: [ ] S1  [ ] S2 ..." is a stage SELECTOR, not a
+        # criterion. Several boxes on one line is what distinguishes it.
+        if st.count("[ ]") > 1:
+            continue
+        if st.startswith("[ ] "):
+            items.append(re.sub(r"^\[ \]\s*", "", st))
+        elif items and st and not st.startswith(("[", "#", "`"))                 and not re.match(r"^[A-Z][\w /]+\(.\d\)\s*:$", st):
+            # a wrapped continuation of the criterion above
+            items[-1] = items[-1].rstrip() + " " + st
+    return items or None
+
+
+def evaluate_design_review(criteria, ctx, attestations):
+    """Same four-verdict shape as a gate, against the sec.8 checklist."""
+    saved = CHECKS[:]
+    try:
+        CHECKS[:] = DESIGN_CHECKS
+        rows, orphans = evaluate(DESIGN_REVIEW, criteria, ctx, attestations)
+    finally:
+        CHECKS[:] = saved
+    universal = sum(1 for r in rows
+                    if re.search(r"\b(every|all|each)\b", r["criterion"], re.I))
+    return rows, orphans, universal

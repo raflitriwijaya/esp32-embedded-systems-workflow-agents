@@ -86,9 +86,16 @@ current:
     targets: [esp32, esp32s3]          # targets this project intends to support
     idf_pinned: "6.0.2"                # version pinned by the docs — compared against installed
   registers:                           # pointers, never copies
-    assumptions: design/requirements/assumption-register.md
-    debt: tracking/debt/
-    tasks: tracking/tasks/
+    assumptions:  design/requirements/assumption-register.md
+    requirements: design/requirements/REQ-register.md   # SECTION7 sec.4.1
+    decisions:    design/decisions/
+    icd:          design/icd/
+    schema:       design/schema/
+    connectivity: design/connectivity/qos-register.md
+    errorcodes:   design/error-codes/
+    architecture: design/architecture/
+    debt:   tracking/debt/
+    tasks:  tracking/tasks/
     issues: tracking/issues/
 
 attestations:                          # only criteria a machine cannot evaluate — see §6
@@ -134,7 +141,7 @@ log:                                   # append-only — existing entries are ne
 | `current.enforcement` | enum | Yes | `advisory` \| `guard` \| `strict` — see §5 |
 | `current.intent.targets` | list | Yes | Targets the project *intends* to support. Not a capability claim — capabilities are derived per target in the cache |
 | `current.intent.idf_pinned` | string | Yes | The ESP-IDF version the documentation pins. The cache compares it against the installed version and reports `idf_pin_match` |
-| `current.registers.*` | path | Yes for `assumptions` | Pointers to the registers owned by SECTION 1 and SECTION 4 |
+| `current.registers.*` | path | Yes for `assumptions` | Pointers to the registers owned by SECTION 1, SECTION 4 and — for the design phase — SECTION 7 §4.1: `requirements`, `decisions`, `icd`, `schema`, `connectivity`, `errorcodes`, `architecture`. SECTION 2 mandates these artifacts but never names a path; SECTION 7 §4.1 already fixes the layout. These pointers are the bridge, and every Section 2 shape check is blocked without them |
 | `attestations[]` | list | Yes (may be empty) | See §6 |
 | `log[]` | list | Yes | Append-only. See §7 |
 
@@ -225,6 +232,7 @@ The log is append-only. Existing entries are never edited; corrections are made 
 | `enforcement_lowered` | `to`, `by`, `reason`, `expires` | Waiver-shaped; expiry is mandatory |
 | `waiver_granted` | `criterion`, `reason`, `expires`, `by` | Risk acceptance per SECTION 1 §3 and SECTION 6 §1.3 |
 | `target_added` / `target_removed` | `target`, `reason` | Any change to `current.intent.targets` requires a trace |
+| `design_review_decided` | `outcome`, `by`, `unmet[]`, `dossier` | SECTION 2 §8. **Not a gate.** It runs *inside* a stage, and its FAIL edge returns to the Measurable Requirements Table rather than to the artifact that failed — so the requirements table is re-edited once per review cycle, and the *never renumbered / tombstone* invariant depends on that table being snapshotted. `outcome` is `ACCEPTED` or `REWORK`; the agent produces `READY`/`NOT-READY` and never this event |
 | `schema_migrated` | `from`, `to` | Recorded when `schema_version` changes — see §11 |
 
 ### 7.1 `origin` on `assumption_opened`

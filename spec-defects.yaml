@@ -1,0 +1,178 @@
+# Verified defects in the workflow specification itself.
+#
+# WHY THIS EXISTS
+# Guards check whether the agent's output is wrong. Nothing checks whether the
+# output is *faithful to a defective example*. WORKFLOW_SECTION2.md:238 writes
+# "stack 4096 words" forty-three lines below its own rule at line 195 that
+# ESP-IDF takes bytes. An agent copying that example is behaving exactly as
+# instructed, and is wrong. This register is the only mechanism that covers it.
+#
+# HOW ENTRIES GET HERE
+# Each was verified independently against the file, and where it involved
+# arithmetic or platform reality, computed or checked against the installed
+# ESP-IDF v6.0.2 tree - not reasoned from memory. One further claim
+# (a non-atomic counter) was investigated and REJECTED as false; it is recorded
+# in `rejected:` so nobody re-raises it.
+#
+# LIFECYCLE
+# `digest: true` entries are injected into every session. When a defect is
+# fixed in the specification, delete the entry - the digest count drops and
+# says why, the same fail-loud behaviour as the version-bound notes block.
+#
+# REVIEW TRIGGER (invariant I2)
+# This is a curated fact list, which is the thing I2 warns against. It must be
+# re-verified whenever WORKFLOW_SECTION2.md changes. `spec_sha256` below is
+# what makes a stale register detectable rather than silently trusted.
+
+source: workflow-iot/WORKFLOW_SECTION2.md
+verified_on: 2026-08-26
+verified_against: ESP-IDF v6.0.2 (C:/esp/v6.0.2/esp-idf)
+spec_sha256: 76265220fbd4816f84027220ed8c294b018d54fff1191eb01fa5593da524f9a9
+
+defects:
+
+  # --- traps: copying the specification faithfully produces wrong output -----
+
+  - id: stack-words
+    lines: [238, 242, 941, 974]
+    class: trap
+    digest: true
+    says: "stack 4096 words / stack 3072 words, in an ESP32 example"
+    correct: >-
+      ESP-IDF takes BYTES. Verified in the installed tree:
+      components/freertos/FreeRTOS-Kernel/include/freertos/task.h:315 -
+      "usStackDepth The size of the task stack specified as the NUMBER OF
+      BYTES. Note that this differs from vanilla FreeRTOS." Line 195 of the
+      spec states the rule correctly; 238 and 242 contradict it 43 lines later.
+      Lines 911-913 and 966-971 use "words" legitimately - that block is
+      declared STM32/CMSIS-RTOS v2.
+
+  - id: header-size
+    lines: [1402]
+    class: trap
+    digest: true
+    says: 'struct.pack(">BBHBBI", ...) for a frame whose MSG_HEADER_SIZE is 7'
+    correct: >-
+      calcsize(">BBHBBI") is 10, not 7. Worse than a size mismatch: `length`
+      lands on a 1-byte 'B', so struct.error is raised for any frame over 255
+      bytes, and every field after Magic is misaligned. The format matching the
+      wire diagram at lines 787-790 is ">BBBHBB" (calcsize 7).
+
+  - id: struct-size
+    lines: [853]
+    class: trap
+    digest: true
+    says: "sensor_reading_t is 12 bytes"
+    correct: >-
+      True size is 24 under normal alignment (enum 4 + int32 4 + uint64 8
+      requiring 8-byte alignment + uint16 2 + padding). 12 is unreachable on any
+      ABI. Sizing a FreeRTOS queue from 12 truncates every element.
+
+  - id: sht30-addr
+    lines: [151, 413, 1036, 1273]
+    class: trap
+    digest: true
+    says: "#define SHT30_I2C_ADDR 0x76"
+    correct: >-
+      0x76 is the BMP280/BME280 address. SHT3x is 0x44 (ADDR low) or 0x45
+      (ADDR high). Four sites carry it, and the surrounding comment claims ADDR
+      is tied to GND - which for an SHT3x means 0x44.
+
+  - id: fromisr-timer
+    lines: [1136, 1139]
+    class: trap
+    digest: true
+    says: "a ...FromISR call inside a FreeRTOS software timer callback"
+    correct: >-
+      Timer callbacks run in the timer service task, not in an interrupt. The
+      FromISR variants and their higher-priority-task-woken plumbing are wrong
+      there; use the task-context API.
+
+  - id: coex-kconfig
+    lines: [201, 229]
+    class: trap
+    digest: true
+    says: "CONFIG_SW_COEXIST_ENABLE"
+    correct: >-
+      The symbol in ESP-IDF v6.0.2 is CONFIG_ESP_COEX_SW_COEXIST_ENABLE.
+      Confirmed by grepping components/**/Kconfig* in the installed tree: only
+      `config ESP_COEX_SW_COEXIST_ENABLE` is defined. The stale name evaluates
+      false and silently leaves coexistence unconfigured. NOTE: the same stale
+      symbol also appears in SECTION3 (3 sites) and SECTION5 (1 site).
+
+  # --- errors that mislead but do not survive a build ------------------------
+
+  - id: length-field
+    lines: [800]
+    class: wrong-reason
+    digest: false
+    says: "Max message size 65520 bytes (limited by 16-bit Length field)"
+    correct: >-
+      A 16-bit Length field permits 65535. The stated cause is false even
+      though a cap may be desirable for other reasons; the number and its
+      justification do not agree.
+
+  - id: pta-pti
+    lines: [202]
+    class: wrong-reason
+    digest: false
+    says: "PTI (Packet Traffic Arbitration)"
+    correct: >-
+      Packet Traffic Arbitration is PTA. PTI is a Silicon Labs term and does
+      not belong in an Espressif context.
+
+  - id: component-yml
+    lines: [182]
+    class: wrong-reason
+    digest: false
+    says: "Add via idf_component_yml"
+    correct: "The manifest is idf_component.yml. Line 211 spells it correctly."
+
+  # --- structural gaps in the specification ----------------------------------
+
+  - id: req-collision
+    lines: [59, 213, 224, 236, 301, 305]
+    class: structural
+    digest: false
+    says: "several REQ-S2-xxx ids carry two or more different meanings"
+    correct: >-
+      Four ids are hard collisions. Every REQ id must denote exactly one
+      requirement, or the traceability chain SECTION1 sec.5 depends on cannot
+      resolve.
+
+  - id: undeclared-fn
+    lines: [678]
+    class: structural
+    digest: false
+    says: "hal_time_get_us() is called but declared in no header"
+    correct: >-
+      sec.5.4 defines only hal_sensor.h. hal_time.h, hal_comm.h and
+      hal_storage.h appear in the sec.5.1 diagram and are never specified.
+
+  - id: sec5-stagescale
+    lines: [423]
+    class: structural
+    digest: false
+    says: "section 5 has no stage-scaling subsection"
+    correct: >-
+      Sections 2, 3, 4, 6 and 7 each carry one. Section 5 is the only major
+      section without, so firmware architecture has no declared stage bar.
+
+  - id: claudemd-refs
+    lines: [1589, 1590]
+    class: structural
+    digest: false
+    says: "sec.8 cites CLAUDE.md sec.2 and sec.5 as authority"
+    correct: >-
+      CLAUDE.md contains no numbered sections at all - only [SYSTEM] and
+      [CONSTRAINTS] markers. Both checklist items are dangling references and
+      can be MACHINE_REFUTED today.
+
+# Investigated and found NOT to be defects. Recorded so they are not re-raised.
+rejected:
+  - id: nonatomic-counter
+    claim: "a dropped-sample counter is incremented from two contexts unguarded"
+    finding: >-
+      Verified false. The claim does not hold against the text as written.
+      Copying it into the register would have introduced a fabricated defect
+      into the mechanism built to prevent fabrication.

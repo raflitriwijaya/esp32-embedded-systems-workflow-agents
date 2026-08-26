@@ -31,11 +31,9 @@ from pathlib import Path
 try:
     import guards
     import gates
+    import design_check
 except ImportError:  # guards.py sits beside this file
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    import guards
-    import gates
-
 SCHEMA_VERSIONS_UNDERSTOOD = [1]
 CACHE_NAME = ".stage-cache.json"
 STATE_NAME = "stage-state.yaml"
@@ -519,6 +517,61 @@ def collect_targets(root: Path, intent):
     return [found[k] for k in sorted(found)]
 
 
+# ============================================================ spec defects
+
+SPEC_DEFECTS_FILE = "spec-defects.yaml"
+
+
+def load_spec_defects():
+    """The register of verified defects in the workflow specification itself.
+
+    Guards check whether output is wrong. Nothing else checks whether output is
+    *faithful to a defective example* - and the specification writes "stack 4096
+    words" 43 lines below its own rule that ESP-IDF takes bytes. Copying that is
+    obedience, and it is wrong.
+    """
+    f = Path(__file__).resolve().parent.parent / SPEC_DEFECTS_FILE
+    if not f.is_file():
+        return None
+    try:
+        import yaml
+        return yaml.safe_load(f.read_text(encoding="utf-8"))
+    except Exception:                                  # noqa: BLE001
+        return None
+
+
+def spec_defect_status(reg):
+    """Returns (stale_reason, defects) - stale_reason is None when trustworthy.
+
+    A curated fact list is exactly what invariant I2 warns against, so the
+    register carries the hash of the specification it was verified against. A
+    changed specification makes it detectable rather than silently trusted."""
+    if not reg:
+        return "register absent", []
+    src = reg.get("source")
+    stale = None
+    if src:
+        for base in (Path(__file__).resolve().parents[2], Path.cwd()):
+            cand = base / src
+            if cand.is_file():
+                actual = sha256_file(cand)
+                # Coerce: an all-digit hash written unquoted is parsed by YAML
+                # as an integer, and an integer 0 is falsy - which would report
+                # "not stamped" for a hash that is merely wrong. Found by test.
+                recorded = reg.get("spec_sha256")
+                recorded = str(recorded) if recorded is not None else None
+                if not recorded or recorded == "None":
+                    stale = ("baseline not stamped - run "
+                             "'stage_kernel.py spec-stamp'")
+                elif recorded != actual:
+                    stale = (f"{src} changed since verification "
+                             f"({short(recorded)} -> {short(actual)}) - re-verify")
+                break
+        else:
+            stale = f"{src} not reachable from here"
+    return stale, (reg.get("defects") or [])
+
+
 def build_cache(root: Path, state, state_sha) -> dict:
     cur = (state or {}).get("current") or {}
     intent = (cur.get("intent") or {})
@@ -841,6 +894,57 @@ def render_digest(root: Path, state, state_sha, cache, stale_reason) -> str:
                  "asserting them")
     L.append("")
 
+    reg_defects = load_spec_defects()
+    stale_reason, defects = spec_defect_status(reg_defects)
+    if defects or stale_reason:
+        traps = [d for d in defects if d.get("digest")]
+        L.append("spec_defects:")
+        L.append(f"  source: {y((reg_defects or {}).get('source'))}")
+        L.append(f"  verified_on: {y((reg_defects or {}).get('verified_on'))}")
+        L.append(f"  total: {len(defects)}   # {len(traps)} shown; rest in "
+                 f"{SPEC_DEFECTS_FILE}")
+        if stale_reason:
+            L.append(f"  STALE: {y(stale_reason)}")
+        if traps:
+            L.append("  traps:   # copying the spec faithfully here produces "
+                     "wrong output")
+            for d in traps:
+                lines = ",".join(str(x) for x in (d.get("lines") or [])[:4])
+                # First sentence only: enough to recognise the trap while
+                # reading, with the full correction one file away.
+                corr = " ".join(str(d.get("correct", "")).split())
+                head = corr.split(". ")[0]
+                if len(head) > 150:
+                    head = head[:147] + "..."
+                elif head != corr:
+                    head += "."
+                L.append(f"    - at: {y('L' + lines)}")
+                L.append(f"      says: {y(d.get('says'))}")
+                L.append(f"      correct: {y(head)}")
+        L.append("  rule: do not reproduce these, even when copying the "
+                 "specification's own example")
+        L.append("")
+
+    # Section 2 design artifacts - shape only
+    try:
+        dfind = design_check.run(root, state)
+        dsum = design_check.summarise(dfind)
+    except Exception:                                  # noqa: BLE001
+        dfind, dsum = [], None
+    if dsum and (dsum["machine_refuted"] or dsum["machine_checked"]):
+        L.append("design:")
+        L.append(f"  checks: {{ machine_checked: {dsum['machine_checked']}, "
+                 f"machine_refuted: {dsum['machine_refuted']}, "
+                 f"unverifiable: {dsum['unverifiable']} }}")
+        ref = [f for f in dfind if f["status"] == design_check.REFUTED]
+        if ref:
+            L.append("  refuted:")
+            for f in ref[:4]:
+                L.append(f"    - {y(f['check'] + ': ' + f['why'])}")
+        L.append("  rule: these establish SHAPE only - never whether a "
+                 "requirement is right or a target is true")
+        L.append("")
+
     unknowns = (cache or {}).get("unknowns") or []
     L.append("not_known:")
     L.append(f"  items: {ylist(unknowns) if unknowns else '[]'}")
@@ -1128,6 +1232,114 @@ def cmd_gate(root: Path) -> int:
     return 0
 
 
+def cmd_design(root: Path) -> int:
+    """Run the Section 2 design artifact shape checks."""
+    try:
+        state, _ = load_state(root)
+    except StateError as e:
+        print(f"cannot run design checks: {e}", file=sys.stderr)
+        return 2
+    findings = design_check.run(root, state)
+    summary = design_check.summarise(findings)
+    print(f"DESIGN SHAPE CHECKS   machine-checked {summary['machine_checked']} "
+          f"| refuted {summary['machine_refuted']} | unverifiable "
+          f"{summary['unverifiable']}")
+    for f in findings:
+        print(NL + f"  [{f['status']}] {f['check']}")
+        print(f"     {f['why']}")
+        for e in f["evidence"][:6]:
+            print(f"     evidence: {e}")
+    print(NL + "  These establish SHAPE only. A well-formed requirement can "
+          "still be the wrong requirement.")
+    return 0
+
+
+def cmd_spec_stamp(root: Path) -> int:
+    """Record the hash of the specification the defect register was verified against."""
+    reg_path = Path(__file__).resolve().parent.parent / SPEC_DEFECTS_FILE
+    reg = load_spec_defects()
+    if not reg:
+        print(f"{SPEC_DEFECTS_FILE} not found or unreadable", file=sys.stderr)
+        return 2
+    src = reg.get("source")
+    spec = None
+    for base in (Path(__file__).resolve().parents[2], Path.cwd()):
+        if (base / src).is_file():
+            spec = base / src
+            break
+    if spec is None:
+        print(f"{src} not reachable", file=sys.stderr)
+        return 2
+    digest_hex = sha256_file(spec)
+    text = reg_path.read_text(encoding="utf-8")
+    text = re.sub(r"^spec_sha256:.*$", f"spec_sha256: {digest_hex}",
+                  text, count=1, flags=re.M)
+    reg_path.write_text(text, encoding="utf-8")
+    print(f"stamped {SPEC_DEFECTS_FILE} against {src} ({short(digest_hex)})")
+    return 0
+
+
+def cmd_design_review(root: Path) -> int:
+    """SECTION2 sec.8 design review - an intra-stage review moment.
+
+    Not a SECTION1 gate: it runs inside a stage, and its FAIL edge returns to
+    the Measurable Requirements Table rather than to the artifact that failed.
+    """
+    try:
+        state, _ = load_state(root)
+    except StateError as e:
+        print(f"cannot run the design review: {e}", file=sys.stderr)
+        return 2
+    d = spec_dir()
+    if not d:
+        print("SECTION2 not reachable - set EMBEDDED_WORKFLOW_SPEC_DIR",
+              file=sys.stderr)
+        return 2
+    criteria = gates.parse_design_review(d)
+    if not criteria:
+        print("SECTION2 sec.8 checklist not found", file=sys.stderr)
+        return 2
+
+    ctx = _gate_context(root, state)
+    ctx["spec_dir"] = str(d)
+    rows, orphans, universal = gates.evaluate_design_review(
+        criteria, ctx, (state.get("attestations") or []))
+    summary = gates.summarise(rows)
+    rec, why = gates.recommendation(summary)
+
+    print(f"DESIGN REVIEW (SECTION2 sec.8)   RECOMMENDATION: {rec}  ({why})")
+    print(f"  total {summary['total']} | machine-checked "
+          f"{summary['machine_checked']} | refuted {summary['machine_refuted']} "
+          f"| attested {summary['human_attested']} | unverifiable "
+          f"{summary['unverifiable']}")
+    print(f"  {universal} of {summary['total']} criteria make a universal claim "
+          f"(every / all / each) over a set no file enumerates. That count is "
+          f"the review's most useful output, and it needs no checks at all.")
+    if orphans:
+        print(f"  ! checks whose anchor matched nothing: {', '.join(orphans)}")
+
+    for i, r in enumerate(rows, 1):
+        if r["status"] == gates.UNVERIFIABLE:
+            continue
+        print(NL + f"  {i}. [{r['status']}] {r['criterion'][:100]}")
+        print(f"     {r['why']}")
+        for e in r["evidence"][:4]:
+            print(f"     evidence: {e}")
+
+    unver = [r for r in rows if r["status"] == gates.UNVERIFIABLE]
+    if unver:
+        print(NL + f"  UNVERIFIABLE ({len(unver)}) - neither machine-checked nor "
+              f"attested:")
+        for r in unver[:12]:
+            print(f"    - {r['criterion'][:96]}")
+        if len(unver) > 12:
+            print(f"    ... and {len(unver) - 12} more")
+
+    print(NL + "  This is a recommendation, not a decision. Record the outcome "
+          "as a design_review_decided event in stage-state.yaml.")
+    return 0
+
+
 def main() -> int:
     # The digest is piped into an agent context across shells whose default
     # code page is not UTF-8. Mojibake in injected context is worse than no
@@ -1139,13 +1351,16 @@ def main() -> int:
             pass
     ap = argparse.ArgumentParser(description="ESP32 Stage Kernel - layer 1")
     ap.add_argument("command",
-                choices=["detect", "cache", "check", "digest", "guard", "gate"])
+                choices=["detect", "cache", "check", "digest", "guard", "gate",
+                         "design", "spec-stamp", "design-review"])
     ap.add_argument("-C", "--directory", default=".", help="project root")
     a = ap.parse_args()
     root = Path(a.directory).resolve()
     return {"detect": cmd_detect, "cache": cmd_cache, "check": cmd_check,
             "digest": cmd_digest, "guard": cmd_guard,
-            "gate": cmd_gate}[a.command](root)
+            "gate": cmd_gate, "design": cmd_design,
+            "spec-stamp": cmd_spec_stamp,
+            "design-review": cmd_design_review}[a.command](root)
 
 
 if __name__ == "__main__":

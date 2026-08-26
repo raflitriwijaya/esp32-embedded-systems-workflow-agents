@@ -238,16 +238,100 @@ def g_arduino(path, text, ctx):
 
 
 # Units that mark a line as asserting a measurement rather than a design intent.
-_MEASURED_UNIT = (r"(?:bytes?|B|KB|kB|MiB|ms|us|µs|s|dBm|mA|uA|A|MHz|kHz|Hz|"
-                  r"%|°C|degC|hours?|h)")
+# Hole 3 (verified): the electrical and mechanical units carrying every hard
+# number in SECTION2 sec.4.1/sec.4.2 - the hardware bring-up checklist - were
+# absent, so "Supply rail measured at 3.28 V" passed silently.
+_MEASURED_UNIT = (
+    r"(?:bytes?|B|KB|kB|MiB|ms|us|µs|s|dBm|mA|uA|µA|A|mV|µV|V|"
+    r"MHz|kHz|Hz|%|°C|degC|hours?|h|"
+    r"kΩ|MΩ|Ω|kOhm|MOhm|Ohm|"
+    r"pF|nF|µF|uF|F|mW|W|mm|cm|mil|ppm)")
 # Anything that shows where a number came from.
+# Hole 2 (verified): REQ- was treated as a citation. It is not. A requirement
+# is what a number must SATISFY, not where it came from - "12 uA, satisfying
+# REQ-S2-009" cites nothing. ASM- stays: an assumption is a legitimate trace,
+# because it says openly that the number is not yet evidenced.
 _CITATION = re.compile(
-    r"(tests/reports/|\.log\b|\.json\b|\.csv\b|ASM-|TRACE-|TASK-|REQ-|"
-    r"datasheet|measured on|per SECTION|@[0-9a-f]{4,}|KERNEL_OBS)", re.I)
+    r"(tests/reports/|\.log\b|\.json\b|\.csv\b|ASM-|TRACE-|TEST-|"
+    r"datasheet|measured on|measurement record|per SECTION|@[0-9a-f]{4,}|"
+    r"KERNEL_OBS)", re.I)
 # Ranges, targets and budgets are intentions, not measurements.
+# A CONTRACT BOUND is not a measurement. "Blocking: <= 10 ms" in a port
+# interface is a promise the implementation must keep; flagging it would flood
+# every correctly-written sec.5.4 header. Found by testing: CLOSURE_SPEC had
+# ASSERTED this case was already exempt, and it was not.
+#
+# The distinguishing feature is a relational operator or a contract keyword -
+# NOT the word "measured". "worst-case measured at 15.1 ms" carries no operator
+# and must still fire, because that phrasing is exactly how a datasheet figure
+# gets relabelled as an observation.
 _INTENT = re.compile(r"(target|budget|shall|must|requirement|limit|threshold|"
-                     r"at least|no more than|maximum|minimum|range|TBD|e\.g\.|"
-                     r"example|template|<[A-Za-z_ ]+>)", re.I)
+                     r"at least|no more than|not exceed|maximum|minimum|range|"
+                     r"blocking|reentrant|timeout|deadline|period|interval|"
+                     r"TBD|e\.g\.|example|template|<[A-Za-z_ ]+>|"
+                     r"<=|>=|≤|≥)", re.I)
+
+
+# Hole 1 (verified): every line beginning with "|" was skipped, so the
+# Measurable Target column of the SECTION2 sec.2.1 requirements table - the
+# highest-risk surface in the whole chapter - was invisible.
+#
+# The fix is NOT to stop skipping tables. Design tables legitimately carry
+# contract and target statements, and firing on those would flood a correct
+# document. Instead: parse the table, and inspect only the columns that hold
+# measurements. Column identity is what makes this decidable, and it is why
+# this guard needs the register pointers from the context layer.
+_MEASUREMENT_COLUMNS = ("measurable target", "measured", "measurement",
+                        "actual", "observed", "result", "value")
+_PROSE_COLUMNS = ("requirement", "description", "rationale", "content", "rule",
+                  "note", "notes", "column", "criterion", "alternatives")
+# SECTION2 sec.2.1: "If the measurable target relies on an unvalidated premise,
+# the assumption ID must be logged." The Assumption column IS the table's
+# provenance mechanism, so a citation may legitimately sit in a DIFFERENT cell
+# of the same row. Checking cells in isolation flagged a correctly-filled row -
+# found by testing against the specification's own worked example.
+_TRACE_COLUMNS = ("assumption", "source", "evidence", "reference", "trace")
+
+
+def _split_row(line):
+    inner = line.strip()
+    if inner.startswith("|"):
+        inner = inner[1:]
+    if inner.endswith("|"):
+        inner = inner[:-1]
+    return [c.strip() for c in inner.split("|")]
+
+
+def _is_separator(line):
+    cells = _split_row(line)
+    return bool(cells) and all(re.fullmatch(r":?-{2,}:?", c) for c in cells if c)
+
+
+def _measurement_cells(lines, i):
+    """If lines[i] starts a markdown table, yield (line_no, cell, trace) for
+    cells under a measurement column. `trace` is the joined text of that row's
+    trace columns, so a citation held elsewhere in the row still counts.
+
+    Returns (entries, rows_consumed). A table whose header names no measurement
+    column is skipped entirely - the conservative direction, and what keeps
+    contract tables quiet."""
+    if i + 1 >= len(lines) or not _is_separator(lines[i + 1]):
+        return [], 0
+    header = [h.lower() for h in _split_row(lines[i])]
+    wanted = [n for n, h in enumerate(header)
+              if any(k in h for k in _MEASUREMENT_COLUMNS)
+              and not any(k in h for k in _PROSE_COLUMNS)]
+    tracecols = [n for n, h in enumerate(header)
+                 if any(k in h for k in _TRACE_COLUMNS)]
+    j, out = i + 2, []
+    while j < len(lines) and lines[j].strip().startswith("|"):
+        cells = _split_row(lines[j])
+        trace = " ".join(cells[n] for n in tracecols if n < len(cells))
+        for n in wanted:
+            if n < len(cells) and cells[n]:
+                out.append((j + 1, cells[n], trace))
+        j += 1
+    return out, j - i
 
 
 def g_numeric_claim(path, text, ctx):
@@ -258,21 +342,51 @@ def g_numeric_claim(path, text, ctx):
     difference is a citation.
     """
     out = []
-    for i, line in enumerate(text.splitlines(), 1):
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i]
         st = line.strip()
-        if not st or st.startswith(("#", ">", "|", "-", "*", "`")):
-            continue                       # headings, tables, lists, quotes, code
+
+        if st.startswith("|"):
+            cells, consumed = _measurement_cells(lines, i)
+            for ln, cell, trace in cells:
+                if not re.search(rf"\b\d[\d.,]*\s*{_MEASURED_UNIT}\b", cell):
+                    continue
+                # Citation may sit in the cell OR in the row's trace columns.
+                # Intent is judged on the cell alone: a "shall" in the adjacent
+                # Requirement column must not exempt the measurement.
+                if _CITATION.search(cell) or _CITATION.search(trace):
+                    continue
+                if _INTENT.search(cell):
+                    continue
+                out.append(_f("numeric-claim",
+                              "a measurement column states a figure with no "
+                              "citation. Give the measurement record or report "
+                              "it came from, or name the assumption (ASM-) it "
+                              "rests on. The Assumption column exists for this.",
+                              "SECTION2 sec.2.1 Measurable Target; "
+                              "SECTION1 sec.5 evidence tiers", ln))
+            i += consumed if consumed else 1
+            continue
+
+        if not st or st.startswith(("#", ">", "-", "*", "`")):
+            i += 1
+            continue
         if not re.search(rf"\b\d[\d.,]*\s*{_MEASURED_UNIT}\b", st):
+            i += 1
             continue
         if _CITATION.search(st) or _INTENT.search(st):
+            i += 1
             continue
         out.append(_f("numeric-claim",
                       "a figure with a unit is stated as fact with no citation. "
                       "Cite the log, report, or datasheet it came from, or mark "
                       "it as an assumption (ASM-) until it is measured.",
                       "SECTION1 sec.5 evidence tiers; SECTION5 RL-ESP-06",
-                      i))
-    return out[:6]
+                      i + 1))
+        i += 1
+    return out[:8]
 
 
 # ============================================================ registry
@@ -313,7 +427,11 @@ REGISTRY = [
     ("warn-suppress", "guard",    _is_sdkconfig, g_warn_suppress,  True),
     ("legacy-driver", "guard",    _is_source,    g_legacy_driver,  True),
     ("arduino-ban",   "guard",    _is_source,    g_arduino,        True),
-    ("numeric-claim", "strict",   _is_claim_doc, g_numeric_claim,  True),
+    # Hole 4 (verified): at "strict" this guard denies only at S4-S5, while
+    # the design phase runs at S1-S3 - so it could never deny during the
+    # work it exists to protect. At "guard" it warns at S1 and denies at
+    # S2-S3, which is where design documents are actually written.
+    ("numeric-claim", "guard",    _is_claim_doc, g_numeric_claim,  True),
     ("evidence-path", "strict",   None,          None,             False),
 ]
 
