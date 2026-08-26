@@ -16,9 +16,10 @@ The directory structure mirrors the install target, so installation is a copy or
 |---|---|---|
 | `STAGE_STATE_SCHEMA.md` | — (reference only) | Specification of `stage-state.yaml` and `.stage-cache.json` |
 | `MCP_SPEC.md` | — (reference only) | Evidence wiring: the two MCP servers, the Bash allowlist, build-log capture |
+| `GATE_SPEC.md` | — (reference only) | Gate verdicts, the adversary, and the dossier |
 | `templates/` | — (copied per project) | `stage-state.template.yaml` — 11-line bootstrap for a new project |
-| `skills/` | `~/.claude/skills/` | User-invoked and model-invoked skills |
-| `agents/` | `~/.claude/agents/` | Subagent definitions (auditor, adversary) |
+| `skills/` | `~/.claude/skills/` | `gate-dossier` - assembles a gate readiness dossier |
+| `agents/` | `~/.claude/agents/` | `gate-adversary` - read-only, refutes gate readiness |
 | `hooks/` | referenced from `~/.claude/settings.json` | `SessionStart` digest, `PreToolUse` guards |
 | `tools/` | invoked by hooks and skills | Cache generator, log fold, validators |
 
@@ -104,8 +105,8 @@ This table records the *current* baseline for the framework's own calibration. P
 | 1 | `SessionStart` digest: bootstrap-aware, multi-target — `hooks/DIGEST_SPEC.md`, `tools/stage_kernel.py`, `hooks/session_start_digest.ps1` | No |
 | 2 | `PreToolUse` guards - `hooks/GUARD_SPEC.md`, `tools/guards.py`, `hooks/pre_tool_use_guard.ps1` | No |
 | 3 | MCP wiring + build-log evidence - `MCP_SPEC.md`, `tools/idf_run.ps1`, `tools/idf_mcp_launch.ps1` | No, except flashing |
-| 4 | Gate dossier skill and adversary subagent, calibrated for gates 1→2 and 2→3 | No |
+| 4 | Gate validator, adversary subagent, dossier skill - `GATE_SPEC.md`, `tools/gates.py`, `agents/gate-adversary.md`, `skills/gate-dossier/` | No |
 | 5 | Numeric claim closure loop and numeric guards | **Yes** |
 | 6 | Gates 3→4 and above | Yes |
 
-Phases 0-3 are complete. `espressif-docs` is registered at user scope and awaits a one-time OAuth login via `/mcp`; the ESP-IDF Tools server is registered per project, since `idf.py mcp-server` only runs inside one. Phase 4 is buildable before the first ESP32 project exists, on a throwaway project created with `idf.py create-project` and `idf.py set-target`.
+Phases 0-4 are complete. `espressif-docs` is registered at user scope and awaits a one-time OAuth login via `/mcp`; the ESP-IDF Tools server is registered per project, since `idf.py mcp-server` only runs inside one. Phases 5 and 6 need hardware and a real project, on a throwaway project created with `idf.py create-project` and `idf.py set-target`.

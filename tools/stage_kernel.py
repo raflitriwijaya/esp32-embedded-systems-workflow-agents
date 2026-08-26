@@ -797,7 +797,8 @@ def render_digest(root: Path, state, state_sha, cache, stale_reason) -> str:
          (f"  recommendation: {y(grec[0])}   # {grec[1]}" if grec else
           "  recommendation: null   # validator could not run (SECTION1 unreachable)"),
          "  rule: a criterion that is not shown as met must never be described as "
-         "met; READY is a recommendation, PASS is the engineer's to record",
+         "met; READY is a recommendation and the gate decision is the "
+         "engineer's to record",
          *( [f"  anchors_lost: {ylist(gorph)}   # SECTION1 wording may have changed"]
             if gorph else [] ),
          "",
@@ -1100,8 +1101,8 @@ def cmd_gate(root: Path) -> int:
             print(f"     evidence: {e}")
         for h in r["hints"][:3]:
             print(f"     hint: {h}")
-    print(NL + "  This is a recommendation, not a decision. PASS/FAIL is recorded "
-          "by the engineer as a gate_decided log event.")
+    print(NL + "  This is a recommendation, not a decision. The decision is "
+          "recorded by the engineer as a gate_decided log event.")
     return 0
 
 
