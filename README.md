@@ -17,6 +17,7 @@ The directory structure mirrors the install target, so installation is a copy or
 | `STAGE_STATE_SCHEMA.md` | — (reference only) | Specification of `stage-state.yaml` and `.stage-cache.json` |
 | `MCP_SPEC.md` | — (reference only) | Evidence wiring: the two MCP servers, the Bash allowlist, build-log capture |
 | `GATE_SPEC.md` | — (reference only) | Gate verdicts, the adversary, and the dossier |
+| `CLOSURE_SPEC.md` | — (reference only) | Claim closure, observation sources, the `KERNEL_OBS` convention |
 | `templates/` | — (copied per project) | `stage-state.template.yaml` — 11-line bootstrap for a new project |
 | `skills/` | `~/.claude/skills/` | `gate-dossier` - assembles a gate readiness dossier |
 | `agents/` | `~/.claude/agents/` | `gate-adversary` - read-only, refutes gate readiness |
@@ -99,14 +100,29 @@ This table records the *current* baseline for the framework's own calibration. P
 
 ## Build order
 
-| Phase | Contents | Requires hardware |
+| Phase | Contents | Status |
 |---|---|---|
-| 0 | `stage-state.yaml` schema; specification synchronised to v6.0.2 | No |
-| 1 | `SessionStart` digest: bootstrap-aware, multi-target — `hooks/DIGEST_SPEC.md`, `tools/stage_kernel.py`, `hooks/session_start_digest.ps1` | No |
-| 2 | `PreToolUse` guards - `hooks/GUARD_SPEC.md`, `tools/guards.py`, `hooks/pre_tool_use_guard.ps1` | No |
-| 3 | MCP wiring + build-log evidence - `MCP_SPEC.md`, `tools/idf_run.ps1`, `tools/idf_mcp_launch.ps1` | No, except flashing |
-| 4 | Gate validator, adversary subagent, dossier skill - `GATE_SPEC.md`, `tools/gates.py`, `agents/gate-adversary.md`, `skills/gate-dossier/` | No |
-| 5 | Numeric claim closure loop and numeric guards | **Yes** |
-| 6 | Gates 3→4 and above | Yes |
+| 0 | `stage-state.yaml` schema; specification synchronised to ESP-IDF v6.0.2 | Done |
+| 1 | `SessionStart` digest - `hooks/DIGEST_SPEC.md`, `tools/stage_kernel.py`, `hooks/session_start_digest.ps1` | Done |
+| 2 | `PreToolUse` guards - `hooks/GUARD_SPEC.md`, `tools/guards.py`, `hooks/pre_tool_use_guard.ps1` | Done |
+| 3 | MCP wiring + build-log evidence - `MCP_SPEC.md`, `tools/idf_run.ps1`, `tools/idf_mcp_launch.ps1` | Done |
+| 4 | Gate validator, adversary subagent, dossier skill - `GATE_SPEC.md`, `tools/gates.py`, `agents/gate-adversary.md`, `skills/gate-dossier/` | Done |
 
-Phases 0-4 are complete. `espressif-docs` is registered at user scope and awaits a one-time OAuth login via `/mcp`; the ESP-IDF Tools server is registered per project, since `idf.py mcp-server` only runs inside one. Phases 5 and 6 need hardware and a real project, on a throwaway project created with `idf.py create-project` and `idf.py set-target`.
+**This is the whole agent.** Phases 0-4 implement human-in-the-loop support for SECTION 1: stage awareness, anti-hallucination guards, gate readiness with an adversary, and a decision boundary the agent cannot cross.
+
+### Deliberately out of scope
+
+A measurement-ingestion layer was built and then removed. It parsed `idf.py size` output and a custom runtime telemetry convention into a tier-E0 observation store, and was verified by running firmware under QEMU.
+
+It worked, and it was the wrong thing to build. The goal here is an agent that supports an engineer's judgement, not a pipeline that collects embedded measurements. Two ideas from that work were worth keeping, and they now live in the documents that own them:
+
+| Kept | Where |
+|---|---|
+| An assumption closed with `resolution: measured` must cite an evidence file that exists | `STAGE_STATE_SCHEMA.md` §10 |
+| `numeric-claim` guard - a figure with a unit, stated as fact, with no citation | `hooks/GUARD_SPEC.md` §4 |
+
+Both are anti-hallucination rules, which is why they belong. The parsers, the telemetry convention and the emulator work did not.
+
+Build-log capture stays: `tools/idf_run.ps1` archives a build log, and the warning count from it is what makes the Gate 2→3 zero-warning criterion machine-checkable rather than a matter of opinion.
+
+Gates 3→4 and above are unimplemented. Their criteria concern PCBs, pilot batches, burn-in and regulatory packages; writing checks against conditions never observed would produce specifications untested by reality.

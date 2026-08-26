@@ -278,10 +278,6 @@ Machine-generated, git-ignored, regenerable, never hand-edited. Discarding it lo
       { "target": "esp32s3", "unicore": false, "freertos_hz": 100, "psram": true,
         "sdkconfig_sha256": "a3f1…",
         "last_build": { "ok": true, "warnings": 0, "at": "…" } } ] },
-  "observations": [
-    { "claim": "stack_hwm.vSensorTask", "value": 1312, "unit": "bytes",
-      "source": "tests/reports/hwm-2026-08-27.log",
-      "unit_id": "SN-0003", "fw": "v0.3.1", "measured_at": "…" } ],
   "unknowns": [ "heap_trend_72h", "coex_throughput_impact" ],
   "derived": { "assumptions_open": 4, "precision_bar": 20, "within_bar": true },
   "stale_if_changed": { "sdkconfig_sha256": "a3f1…", "state_file_sha256": "…" } }
@@ -310,7 +306,11 @@ Checked at every `SessionStart` by the fold routine:
 [ ] log timestamps are monotonically non-decreasing
 [ ] every assumption_resolved refers to an id previously assumption_opened
 [ ] every attestation with method: agent-adversary satisfies §6.1
+[ ] every assumption_resolved with resolution: measured cites an evidence
+    path, and that path exists on disk
 ```
+
+The last rule closes the cheapest lie the schema would otherwise permit. `resolution: measured` asserts that a number came from the real system; without a check, one log line closes an assumption that was never measured, and the register then shows a claim settled by evidence that does not exist. The check establishes that the cited file **exists**, not that it contains the measurement — a real limit, stated rather than glossed.
 
 On failure the digest prints `INCONSISTENT` and **refuses to assert the stage** until the file is repaired. The reasoning matches the `STALE` rule: declaring ignorance is safe, while declaring the wrong stage silently applies the wrong RSMR bar to every piece of work governed by SECTION 2 through SECTION 7.
 

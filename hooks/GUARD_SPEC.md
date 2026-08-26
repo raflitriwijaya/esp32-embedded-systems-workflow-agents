@@ -53,8 +53,8 @@ A denial is overridable through the normal permission flow. The reason text says
 | `warn-suppress` | guard | `sdkconfig*` | ✅ |
 | `legacy-driver` | guard | C/C++ sources | ✅ |
 | `arduino-ban` | guard | C/C++ sources | ✅ |
-| `evidence-path` | strict | — | ❌ phase 5 |
-| `numeric-claim` | strict | — | ❌ phase 5 |
+| `numeric-claim` | strict | markdown under `design/`, `hardware/`, `reliability/`, `gates/` | ✅ |
+| `evidence-path` | strict | — | ❌ not built |
 
 `stage_kernel.py` imports `guards.implemented_guards()` for the digest's `active_guards`, so an unimplemented guard can never be advertised as active. This is invariant I2 applied to the framework itself.
 
@@ -84,6 +84,20 @@ Fires on `sdkconfig*` files containing `CONFIG_COMPILER_DISABLE_DEFAULT_ERRORS=y
 
 ### `legacy-driver`
 The nine headers removed in ESP-IDF v6.0, each mapped to its replacement, plus `driver/i2c.h` (EOL, removal in v7.0) and a few unmistakable legacy call names. When the installed IDF is a 5.x release the message says *deprecated rather than removed — it will break on upgrade*, because the installed version is read from ground truth rather than assumed.
+
+### `numeric-claim`
+
+Strict level. Fires on a figure with a unit stated as fact, with nothing showing where it came from.
+
+| Fires | Allowed |
+|---|---|
+| `The sensor task peak stack usage is 3100 bytes.` | `Peak stack 3100 bytes (tests/reports/hwm-2026-08-27.log).` |
+| `Measured RX sensitivity is -94 dBm at the far point.` | `Assume 4096 bytes for now - ASM-S2-001, due 2026-09-30.` |
+| `Sleep current settles at 12 uA.` | `Target: sleep current must be below 20 uA.` |
+
+The exemptions carry the design. A **target**, a **budget**, a **limit** and a **range** are intentions, not measurements; flagging them would train the engineer to dismiss the guard, and a dismissed guard protects nothing. Headings, table rows and templates are excluded, as is `tests/reports/`, which holds the evidence itself.
+
+This is the textual counterpart of the closure rule in `STAGE_STATE_SCHEMA.md` §10: a measurement that never happened reads exactly like one that did, and the difference is a citation. Verified 14/14 across signal and false-positive cases.
 
 ### `arduino-ban`
 `Arduino.h`, `pinMode(`, `digitalWrite(`, `digitalRead(`, `analogWrite(`. Redundant with the compiler, retained because CLAUDE.md §2 and SECTION3 §3.3 state the rule.
@@ -143,6 +157,7 @@ A guard that silently never fires is worse than no guard, and would be indisting
 [ ] non-ESP-IDF project directory                           -> allow
 [ ] enforcement advisory: findings surfaced, nothing denied -> allow
 [ ] digest active_guards contains no unimplemented guard
+[ ] numeric-claim: bare measurement fires; target/budget/range/citation do not
 ```
 
 Driving a guard manually:
