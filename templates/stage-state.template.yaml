@@ -1,0 +1,67 @@
+# =============================================================================
+# stage-state.yaml — copy this file to the ROOT of a new project.
+#
+# Authored by the engineer. The agent never writes here (PreToolUse denies it).
+# Full specification: workflow-iot/STAGE_STATE_SCHEMA.md
+#
+# THE ONE RULE: this file holds decisions, intent, attestations, and history.
+# It holds NO derived fact. Never add: installed IDF version, core count,
+# unicore/psram/tick rate, build status, warning counts, any measured number,
+# open-assumption counts, or per-item gate status. Those live in the generated
+# .stage-cache.json, or are computed. See STAGE_STATE_SCHEMA §3.
+# =============================================================================
+
+schema_version: 1
+
+project:
+  id: <slug>                       # stable, never changes; e.g. node-gw-01
+  name: "<name>"
+  created: <YYYY-MM-DD>
+
+current:
+  stage: S1                        # S1 | S2 | S3 | S4 | S5  (SECTION 1 §2)
+  entered: <YYYY-MM-DD>
+  enforcement: advisory            # advisory | guard | strict
+                                   #   default by stage: S1 advisory,
+                                   #   S2-S3 guard, S4-S5 strict.
+                                   #   Raising above default: free, log it.
+                                   #   Lowering below default: needs reason + expires.
+                                   #   NOTE for ESP-IDF v6.0.2: consider enabling the
+                                   #   legacy-driver guard already at S1 — removed
+                                   #   drivers fail to compile anyway, so the guard
+                                   #   only gives a clearer message, earlier, for free.
+  intent:                          # DECLARED INTENT — never a measurement
+    targets: [esp32s3]             # targets this project intends to support
+    idf_pinned: "6.0.2"            # version the docs pin; cache compares vs installed
+  registers:                       # pointers, never copies
+    assumptions: design/requirements/assumption-register.md
+    # debt:   tracking/debt/
+    # tasks:  tracking/tasks/
+    # issues: tracking/issues/
+
+# Only criteria a machine cannot evaluate. Empty until the first gate.
+# method: agent-adversary requires dossier + disposed objections — SCHEMA §6.1.
+attestations: []
+
+# Append-only. Never edit an existing entry; correct by appending.
+# ts MUST carry a time and an offset (2026-08-26T09:14:00+07:00).
+#   A bare date folds to midnight, which can make a same-day log look
+#   non-monotonic and trip the consistency check.
+log:
+  - { ts: <ISO8601>, event: stage_entered, stage: S1, by: <engineer>, from: null }
+
+# --- Event vocabulary (SCHEMA §7), for reference while authoring -------------
+#   stage_entered           stage, by, from
+#   gate_decided            gate, decision(PASS|FAIL), by, unmet[], dossier
+#   assumption_opened       id, origin(agent-claim|human|field-incident), tier,
+#                           subject, deadline
+#   assumption_resolved     id, resolution(measured|confirmed|designed-out|
+#                           invalidated), tier
+#   attestation_made        id, criterion, by
+#   attestation_superseded  id, superseded_by, reason
+#   enforcement_raised      to, by
+#   enforcement_lowered     to, by, reason, expires
+#   waiver_granted          criterion, reason, expires, by
+#   target_added/removed    target, reason
+#   schema_migrated         from, to
+# -----------------------------------------------------------------------------
