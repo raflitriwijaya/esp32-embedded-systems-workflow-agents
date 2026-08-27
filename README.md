@@ -26,7 +26,7 @@ The directory structure mirrors the install target, so installation is a copy or
 | `templates/` | — (copied per project) | `stage-state.template.yaml` — 11-line bootstrap for a new project |
 | `skills/` | `~/.claude/skills/` | `gate-dossier` - gate readiness dossier · `design-review` - SECTION 2 sec.8 review |
 | `agents/` | `~/.claude/agents/` | `gate-adversary` - read-only, refutes gate readiness |
-| `hooks/` | referenced from `~/.claude/settings.json` | `SessionStart` digest, `PreToolUse` guards |
+| `hooks/` | referenced from `~/.claude/settings.json` | `SessionStart` digest, `PreToolUse` guards, `PostToolUse` build-evidence notice, `Stop` build-claim hold |
 | `tools/` | invoked by hooks and skills | Cache generator, log fold, validators |
 
 **Install scope: user level.** Installed once at `~/.claude/` and applies to every ESP32 project. Project-specific state lives in each project's own `stage-state.yaml`.
@@ -138,6 +138,8 @@ This table records the *current* baseline for the framework's own calibration. P
 | 4 | Gate validator, adversary subagent, dossier skill - `GATE_SPEC.md`, `tools/gates.py`, `agents/gate-adversary.md`, `skills/gate-dossier/` | Done |
 | 5 | RSMR x Stage obligations - `RSMR_SPEC.md`, `tools/rsmr.py`, `tools/extract_rsmr.py`, `rsmr-matrix.yaml` | Done |
 | 6 | Framework self-test - `stage_kernel.py selftest`: guard registry vs `GUARD_SPEC.md`, legacy-header table vs the installed IDF, extracted copies vs their specification | Done |
+| 7 | Section 3 migration + config bar - `tools/extract_kconfig.py`, `tools/idfconfig.py`, `idf-version-pin` and `assert-ndebug` guards | Done |
+| 8 | The compile loop - `hooks/COMPILE_LOOP_SPEC.md`, `hooks/post_tool_use_build.ps1`, `hooks/stop_build_claim.ps1` | Done |
 
 **This is the whole agent.** Phases 0-4 implement human-in-the-loop support for SECTION 1: stage awareness, anti-hallucination guards, gate readiness with an adversary, and a decision boundary the agent cannot cross.
 
@@ -285,6 +287,20 @@ The rest of §2.2's v6.0 list earns no guard, by this framework's founding rule 
 `stage_kernel.py config` reads what §2.2 makes conditional on stage: assertions enabled from S3, bootloader log silence from S4, `ota_0`+`ota_1` from S3, warning suppression forbidden always. All of it is silent when wrong — a missing OTA partition is a build that flashes and can never update itself.
 
 `config-symbols-real` runs first and checks the check: every symbol these rules name must exist in the installed tree. §2.2 asks for exactly that — *"Confirm both symbol names against the installed v6.0.2 Kconfig tree before wiring them into a CI check"* — and this is that CI check.
+
+### The compile loop — `PostToolUse` and `Stop`
+
+Section 3 is the first phase where an oracle exists that the agent does not control, and running it costs one command. The framework's job shifts from *prevent unevidenced claims* to **make sure the oracle was consulted before the claim was made**.
+
+`PostToolUse` carries the load. After a write to a file the ESP-IDF build actually consumes, it states the consequence — *the archived log no longer establishes that this tree compiles* — and cannot block, which is right: the point is that the model knows. It stays silent on host tests and documents, because `compile_commands.json` says they are not build inputs.
+
+`Stop` is **the only fail-closed mechanism in this framework**, and it holds a turn only on a conjunction: the evidence is stale *and* the turn asserted a build result as fact. Either half alone would be intolerable — the factual half fires on every edit, the linguistic half fires on an honest report.
+
+The claim matcher was tuned against 28 worked cases and sits at zero errors. Two of them exposed real bugs: `error` had been a hedge word, silently suppressing *"compiles without errors"*; and the sentence splitter broke on the period inside `build-esp32s3.log`, cutting a citation in half and leaving the remainder looking like a bare claim.
+
+**The documented `Stop` contract carries no loop protection and no `stop_hook_active` field**, so the limits are load-bearing rather than cautious: never twice in a row, never more than three times a session, `STAGE_KERNEL_NO_STOP=1` disables it, and any error at all fails open. The hold offers two ways out, and the second is not a loophole — saying *the build state is unverified* is a true statement, and this framework prefers it to a false one.
+
+`hooks/COMPILE_LOOP_SPEC.md` carries the matcher table and the registration.
 
 ### Self-test — the framework checked against itself
 

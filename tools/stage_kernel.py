@@ -25,6 +25,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -1749,6 +1750,253 @@ def cmd_config(root: Path) -> int:
     return 0
 
 
+# ========================================================== the compile loop
+#
+# SECTION3 is the first phase where the agent writes the artifact under
+# governance rather than describing it, and where an oracle exists that the
+# agent does not control. The compiler settles what no amount of reading can.
+#
+# Two hooks, and the quiet one carries the load:
+#
+#   PostToolUse   after a write to a build input, state the consequence: the
+#                 archived log no longer describes this tree. Fails open, never
+#                 blocks, no loop is possible.
+#   Stop          blocks the turn ONLY when the model asserted build state as
+#                 fact while the evidence says that state is unknown.
+#
+# The Stop hook is the only fail-CLOSED mechanism in this framework, and the
+# documented Stop contract carries no loop protection and no stop_hook_active
+# field. So the limits below are not caution, they are load-bearing:
+#
+#   - never block twice in a row
+#   - never block more than STOP_MAX_BLOCKS times in a session
+#   - never block when .no-stage-governance exists, or STAGE_KERNEL_NO_STOP is set
+#   - fail open on any error, exactly like every other hook here
+
+STOP_MAX_BLOCKS = 3
+STOP_STATE_DIR = "stage-kernel-stop"
+
+# Asserting a build or test result as fact. Deliberately narrow: a false
+# positive here holds the engineer's turn hostage, which is the fastest way to
+# get the whole mechanism switched off.
+RE_BUILD_CLAIM = re.compile(
+    r"\b(?:compiles|builds)\s+(?:cleanly|fine|successfully|without\s+\w+)"
+    r"|\b(?:the\s+)?build\s+(?:succeeds|succeeded|passes|passed|is\s+clean|"
+    r"went\s+through)"
+    r"|\b(?:zero|no|0)\s+(?:compiler\s+)?warnings\b"
+    r"|\b(?:it|this|that|the\s+code|the\s+firmware)\s+(?:now\s+)?compiles\b"
+    r"|\ball\s+tests?\s+pass(?:ed|es)?\b"
+    r"|\btests?\s+(?:pass|passed|are\s+green)\b",
+    re.I)
+
+# Any of these in the same sentence and the claim is not an assertion of fact:
+# a plan, a conditional, a report of failure, or an explicit admission that it
+# has not been checked.
+RE_CLAIM_HEDGE = re.compile(
+    r"\b(?:should|would|will|shall|expect\w*|assum\w+|presum\w+|probabl\w+|"
+    r"likel\w+|may|might|ought|hopefully|in\s+theory|once|after|before|when|if|"
+    r"unless|until|then|see|to\s+(?:check|confirm|verify|see))\b"
+    # `error` is deliberately NOT here. "compiles without errors" is an
+    # assertion, and hedging on the bare word suppressed it. The claim pattern
+    # is narrow enough that a sentence reporting a failure does not match it.
+    r"|\b(?:not|never|n't|cannot|can't|fails?|failed|failing)\b"
+    r"|\b(?:unverified|unverifiable|unchecked|untested|not\s+yet)\b"
+    r"|\b(?:run|rebuild|please\s+build|needs?\s+a\s+build)\b"
+    # Citing evidence is not asserting a fresh fact. "The archived log shows
+    # zero warnings, but it is stale" is exactly the honest sentence this
+    # mechanism exists to encourage, and it fired before these were added.
+    r"|\b(?:stale|archived|outdated|out\s+of\s+date|no\s+longer|previously|"
+    r"according\s+to|reports?|reported|shows|showed|says|said|last\s+build)\b"
+    r"|\?",
+    re.I)
+
+# A period inside a path is not a sentence end. Splitting on every dot cut
+# "According to tests/reports/build-esp32s3.log there are zero warnings." in
+# two and left the second half looking like a bare assertion.
+RE_SENTENCE = re.compile(r"[^\n]+?(?:[.!?](?=\s|$)|\n|$)")
+
+
+def _stop_state_path(session_id):
+    d = Path(tempfile.gettempdir()) / STOP_STATE_DIR
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", str(session_id or "nosession"))[:80]
+    return d / f"{safe}.json"
+
+
+def _stop_state(session_id):
+    p = _stop_state_path(session_id)
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:                                  # noqa: BLE001
+        return {"blocks": 0, "last_turn_blocked": False}
+
+
+def _save_stop_state(session_id, state):
+    p = _stop_state_path(session_id)
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(state), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _unbound_targets(root: Path, state):
+    """[(target, reason)] whose build evidence does not establish anything."""
+    out = []
+    for t in _gate_context(root, state).get("targets") or []:
+        if not t.get("configured"):
+            continue
+        lb = t.get("last_build") or {}
+        if lb.get("warnings") is None:
+            out.append((t["target"], lb.get("log_binding")
+                        or "no archived build log for this target"))
+    return out
+
+
+def _claim_sentences(message):
+    """Sentences asserting a build or test result with no hedge in them."""
+    hits = []
+    for s in RE_SENTENCE.findall(message or ""):
+        s = s.strip()
+        if not s or not RE_BUILD_CLAIM.search(s):
+            continue
+        if RE_CLAIM_HEDGE.search(s):
+            continue
+        hits.append(" ".join(s.split())[:160])
+    return hits
+
+
+def cmd_post_tool_use(root: Path) -> int:
+    """After a write, say what it did to the build evidence. Never blocks."""
+    raw = (sys.stdin.read() or "").lstrip("\ufeff").strip()
+    if not raw:
+        return 0
+    try:
+        ev = json.loads(raw)
+    except ValueError:
+        return 0
+    ti = ev.get("tool_input") or {}
+    path = (ti.get("file_path") or ti.get("path") or "")
+    if not path:
+        return 0
+    cwd = ev.get("cwd")
+    if cwd and Path(cwd).is_dir():
+        root = Path(cwd).resolve()
+    ok, _ = detect_idf_project(root)
+    if not ok or (root / SILENCE_NAME).exists():
+        return 0
+    # Only files the build actually consumes. A doc or a test source changes
+    # nothing about whether the firmware still compiles.
+    p = path.replace("\\", "/")
+    name = p.split("/")[-1]
+    if not (name in BUILD_INPUT_NAMES or name.startswith("sdkconfig")
+            or any(p.lower().endswith(e) for e in
+                   (".c", ".h", ".cpp", ".hpp", ".cc", ".cxx", ".s"))):
+        return 0
+    if guards.NONFIRMWARE_SEGMENTS.intersection(
+            s.lower() for s in p.split("/")[:-1]):
+        return 0
+    try:
+        state, _ = load_state(root)
+    except StateError:
+        return 0
+    try:
+        stale = _unbound_targets(root, state)
+    except Exception:                                  # noqa: BLE001
+        return 0
+    if not stale:
+        return 0
+    lines = [f"[stage-kernel] {name} is a build input. The archived build log no "
+             f"longer establishes that this tree compiles:"]
+    for tgt, why in stale[:3]:
+        lines.append(f"  {tgt}: {str(why)[:220]}")
+    lines.append("The Gate 2->3 zero-warning criterion reads UNVERIFIABLE until a "
+                 "build is archived. Stating that it compiles is not something "
+                 "this file can show.")
+    print(json.dumps({"hookSpecificOutput": {
+        "hookEventName": "PostToolUse",
+        "additionalContext": NL.join(lines)}}))
+    return 0
+
+
+def cmd_stop(root: Path) -> int:
+    """Block the turn when a build claim outruns the evidence for it.
+
+    The one fail-closed mechanism here. Everything about it is arranged so that
+    a wrong decision costs one message rather than a spin.
+    """
+    raw = (sys.stdin.read() or "").lstrip("\ufeff").strip()
+    if not raw:
+        return 0
+    try:
+        ev = json.loads(raw)
+    except ValueError:
+        return 0
+    if os.environ.get("STAGE_KERNEL_NO_STOP"):
+        return 0
+    cwd = ev.get("cwd")
+    if cwd and Path(cwd).is_dir():
+        root = Path(cwd).resolve()
+    ok, _ = detect_idf_project(root)
+    if not ok or (root / SILENCE_NAME).exists():
+        return 0
+
+    session = ev.get("session_id")
+    st = _stop_state(session)
+    message = ev.get("last_assistant_message") or ""
+
+    claims = _claim_sentences(message)
+    if not claims:
+        if st.get("last_turn_blocked"):
+            st["last_turn_blocked"] = False
+            _save_stop_state(session, st)
+        return 0
+
+    try:
+        state, _ = load_state(root)
+        stale = _unbound_targets(root, state)
+    except Exception:                                  # noqa: BLE001
+        return 0                                       # fail open
+    if not stale:
+        st["last_turn_blocked"] = False
+        _save_stop_state(session, st)
+        return 0
+
+    # Two limits, and they exist because the documented Stop contract has no
+    # loop protection of its own. Blocking a turn the model cannot satisfy is
+    # worse than letting one unevidenced sentence through.
+    if st.get("last_turn_blocked"):
+        print(f"[stage-kernel] the previous turn was already held for this. Not "
+              f"holding again - the build claim stands unverified and it is "
+              f"yours to judge.", file=sys.stderr)
+        st["last_turn_blocked"] = False
+        _save_stop_state(session, st)
+        return 0
+    if st.get("blocks", 0) >= STOP_MAX_BLOCKS:
+        print(f"[stage-kernel] {STOP_MAX_BLOCKS} holds already in this session; "
+              f"not holding again.", file=sys.stderr)
+        return 0
+
+    st["blocks"] = st.get("blocks", 0) + 1
+    st["last_turn_blocked"] = True
+    _save_stop_state(session, st)
+
+    out = ["This turn states a build or test result as fact, and the archived "
+           "evidence does not establish it:"]
+    for c in claims[:2]:
+        out.append(f'  claimed: "{c}"')
+    for tgt, why in stale[:2]:
+        out.append(f"  {tgt}: {str(why)[:240]}")
+    out.append("")
+    out.append("Run the build and let it answer - tools/idf_run.ps1 -Target "
+               "<target> build archives a log, or use the esp-idf MCP "
+               "build_project tool. If you would rather not, say plainly that "
+               "the build state is unverified and stop.")
+    out.append(f"(hold {st['blocks']} of {STOP_MAX_BLOCKS} this session; "
+               f"STAGE_KERNEL_NO_STOP=1 disables this entirely)")
+    print(NL.join(out), file=sys.stderr)
+    return 2
+
+
 def cmd_design_review(root: Path) -> int:
     """SECTION2 sec.8 design review - an intra-stage review moment.
 
@@ -2067,7 +2315,7 @@ def main() -> int:
                 choices=["detect", "cache", "check", "digest", "guard", "gate",
                          "design", "spec-stamp", "design-review",
                          "rsmr", "rsmr-scorecard", "config",
-                         "selftest"])
+                         "post-tool-use", "stop", "selftest"])
     ap.add_argument("-C", "--directory", default=".", help="project root")
     a = ap.parse_args()
     root = Path(a.directory).resolve()
@@ -2078,6 +2326,7 @@ def main() -> int:
             "design-review": cmd_design_review,
             "rsmr": cmd_rsmr, "rsmr-scorecard": cmd_rsmr_scorecard,
             "config": cmd_config,
+            "post-tool-use": cmd_post_tool_use, "stop": cmd_stop,
             "selftest": cmd_selftest}[a.command](root)
 
 
