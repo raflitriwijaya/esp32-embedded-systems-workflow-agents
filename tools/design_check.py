@@ -25,6 +25,9 @@ from pathlib import Path
 # --- SECTION2 sec.2.1 --------------------------------------------------------
 REQ_COLUMNS = ["id", "requirement", "measurable target", "drives", "source",
                "assumption", "stage gate"]
+# Optional, and checked only when present: SECTION2 sec.2.1 does not
+# mandate it. Adding it is a local decision, and the checks say so.
+REQ_COLUMN_ATTRIBUTE = "attribute"
 RE_REQ_ID = re.compile(r"^REQ-S\d-\d{3}$")
 RE_ASM_ID = re.compile(r"^ASM-S\d-\d{3}")
 RE_DRIVES = re.compile(r"\b(HW|FW|TEST|SCH)-\d+\b")
@@ -309,9 +312,198 @@ def c_assumption_references(root, state, reg):
               f"assumption(s)")
 
 
+
+
+# ============================================================ quality attributes
+#
+# SECTION1's stage bar is expressed in RSMR - four of the twelve attributes in
+# the cross-platform reference. SECTION5 supplies measurable criteria for those
+# four and for no others. SECTION2's requirements table binds to neither, so a
+# Measurable Target is a number with no stated relationship to the quality it is
+# meant to buy.
+#
+# Adding an Attribute column closes that: the requirement names what quality it
+# purchases, the vocabulary is closed so it cannot be invented, and the conflict
+# graph shows what the purchase costs elsewhere.
+
+ATTR_FILE = "quality-attributes.yaml"
+RE_CRITERION = re.compile(r"\b(R|S|M|RL)-(ESP|S32|RPI)-\d{2}\b")
+
+
+def load_attributes():
+    f = Path(__file__).resolve().parent.parent / ATTR_FILE
+    if not f.is_file():
+        return None
+    try:
+        import yaml
+        return yaml.safe_load(f.read_text(encoding="utf-8"))
+    except Exception:                                  # noqa: BLE001
+        return None
+
+
+def _attr_cells(root, reg):
+    """(line, [attribute names], target_cell) per requirement row."""
+    pth = reg.get("requirements")
+    if not pth or not (root / str(pth)).is_file():
+        return None, None
+    f = root / str(pth)
+    header, rows, _ = _requirements_table(f.read_text(encoding="utf-8",
+                                                      errors="ignore"))
+    if header is None:
+        return None, None
+    ai = next((n for n, h in enumerate(header) if "attribute" in h), None)
+    ti = next((n for n, h in enumerate(header) if "measurable target" in h), None)
+    ii = next((n for n, h in enumerate(header) if h.strip() == "id"), 0)
+    out = []
+    for ln, cells in rows:
+        def cell(n):
+            return cells[n] if n is not None and n < len(cells) else ""
+        names = [x.strip() for x in cell(ai).split(",") if x.strip()] if ai is not None else []
+        out.append((ln, cell(ii), names, cell(ti)))
+    return out, (ai is not None)
+
+
+def c_attribute_vocabulary(root, state, reg):
+    """Attribute names come from a closed set of twelve. Nothing invented."""
+    spec = load_attributes()
+    if not spec:
+        return _f("attribute-vocabulary", SKIPPED,
+                  f"{ATTR_FILE} absent - run tools/extract_attrs.py")
+    rows, has_col = _attr_cells(root, reg)
+    if rows is None:
+        return _f("attribute-vocabulary", SKIPPED, "requirements table unreadable")
+    if not has_col:
+        return _f("attribute-vocabulary", SKIPPED,
+                  "the requirements table has no Attribute column - a Measurable "
+                  "Target then states a number with no stated relationship to the "
+                  "quality it buys. SECTION2 sec.2.1 does not mandate this column; "
+                  "adding it is a local decision")
+    known = {a["name"] for a in spec["attributes"]}
+    bad = [f"{rid} line {ln}: {n!r} is not one of the twelve"
+           for ln, rid, names, _ in rows for n in names if n not in known]
+    if bad:
+        return _f("attribute-vocabulary", REFUTED,
+                  f"{len(bad)} attribute name(s) outside the closed vocabulary",
+                  bad[:8])
+    total = sum(len(n) for _, _, n, _ in rows)
+    return _f("attribute-vocabulary", VERIFIED,
+              f"{total} attribute claim(s) across {len(rows)} requirement(s), all "
+              f"within the twelve")
+
+
+def c_attribute_measurable(root, state, reg):
+    """A requirement claiming an attribute with no criteria is unverifiable.
+
+    SECTION5 covers RSMR only. Eight of the twelve attributes have no pass
+    condition anywhere, so a requirement resting on one cannot be settled by
+    evidence - which is worth stating rather than discovering at a gate.
+    """
+    spec = load_attributes()
+    if not spec:
+        return _f("attribute-measurable", SKIPPED, f"{ATTR_FILE} absent")
+    rows, has_col = _attr_cells(root, reg)
+    if rows is None or not has_col:
+        return _f("attribute-measurable", SKIPPED, "no Attribute column to read")
+    crit = {a["name"]: (a.get("criteria_esp32") or []) for a in spec["attributes"]}
+    unmeasurable, unnamed = [], []
+    for ln, rid, names, target in rows:
+        if not names:
+            unnamed.append(f"{rid} line {ln}: names no attribute")
+            continue
+        if not any(crit.get(n) for n in names):
+            unmeasurable.append(f"{rid} line {ln}: claims {', '.join(names)} - no "
+                                f"measurable criteria exist for any of them")
+    if unnamed:
+        return _f("attribute-measurable", REFUTED,
+                  f"{len(unnamed)} requirement(s) name no attribute at all",
+                  unnamed[:8])
+    if unmeasurable:
+        return _f("attribute-measurable", REFUTED,
+                  f"{len(unmeasurable)} requirement(s) rest only on attributes with "
+                  f"no measurable criteria - unverifiable by construction",
+                  unmeasurable[:8])
+    return _f("attribute-measurable", VERIFIED,
+              f"every requirement claims at least one attribute that SECTION5 can "
+              f"measure")
+
+
+def c_attribute_conflicts(root, state, reg):
+    """Surface the trade-offs the requirement set has already bought into.
+
+    This is the reference's unique contribution: 44 CONFLICTS edges. Detecting
+    that a project demands both sides of one is not a failure - it is the thing
+    that makes a project's feasibility visible while it can still be changed.
+    """
+    spec = load_attributes()
+    if not spec:
+        return _f("attribute-conflicts", SKIPPED, f"{ATTR_FILE} absent")
+    rows, has_col = _attr_cells(root, reg)
+    if rows is None or not has_col:
+        return _f("attribute-conflicts", SKIPPED, "no Attribute column to read")
+    claimed = {n for _, _, names, _ in rows for n in names}
+    if len(claimed) < 2:
+        return _f("attribute-conflicts", VERIFIED,
+                  f"{len(claimed)} attribute(s) claimed - no pair to conflict")
+    edges = {a["name"]: {c["target"]: c["why"]
+                         for c in (a.get("conflicts_with") or [])}
+             for a in spec["attributes"]}
+    found, seen = [], set()
+    for a in sorted(claimed):
+        for b, why in (edges.get(a) or {}).items():
+            if b in claimed and (b, a) not in seen:
+                seen.add((a, b))
+                found.append(f"{a} vs {b}: {why[:110]}")
+    if found:
+        return _f("attribute-conflicts", VERIFIED,
+                  f"{len(found)} declared trade-off(s) between attributes this "
+                  f"project demands - each is a cost already accepted, not a defect",
+                  found[:6])
+    return _f("attribute-conflicts", VERIFIED,
+              f"{len(claimed)} attribute(s) claimed, no declared conflict between them")
+
+
+def c_target_binds_criterion(root, state, reg):
+    """A Measurable Target for an RSMR attribute should cite the criterion that
+    defines how it is measured. Otherwise the number floats free of its method."""
+    spec = load_attributes()
+    if not spec:
+        return _f("target-binds-criterion", SKIPPED, f"{ATTR_FILE} absent")
+    rows, has_col = _attr_cells(root, reg)
+    if rows is None or not has_col:
+        return _f("target-binds-criterion", SKIPPED, "no Attribute column to read")
+    valid = {c for a in spec["attributes"] for c in (a.get("criteria_esp32") or [])}
+    measurable = {a["name"] for a in spec["attributes"] if a.get("criteria_esp32")}
+    unbound, bogus = [], []
+    for ln, rid, names, target in rows:
+        cited = set(m.group(0) for m in RE_CRITERION.finditer(target))
+        # A fabricated criterion id is a defect on ANY row. Testing caught this:
+        # skipping rows whose attribute has no criteria let RL-ESP-99 through,
+        # because the row was never examined at all.
+        for c in cited:
+            if "-ESP-" in c and c not in valid:
+                bogus.append(f"{rid} line {ln}: cites {c}, which SECTION5 does "
+                             f"not define")
+        # A citation is only *required* where a measurable attribute is claimed.
+        if any(n in measurable for n in names) and not cited:
+            unbound.append(f"{rid} line {ln}: target cites no criterion id")
+    if bogus:
+        return _f("target-binds-criterion", REFUTED,
+                  f"{len(bogus)} target(s) cite a criterion that does not exist",
+                  bogus[:8])
+    if unbound:
+        return _f("target-binds-criterion", REFUTED,
+                  f"{len(unbound)} target(s) for a measurable attribute cite no "
+                  f"SECTION5 criterion, so the number has no stated method",
+                  unbound[:8])
+    return _f("target-binds-criterion", VERIFIED,
+              "every target for a measurable attribute cites a real SECTION5 criterion")
+
+
 CHECKS = [c_registers_present, c_req_table_shape, c_decision_records,
           c_req_references_resolve, c_orphan_requirements,
-          c_assumption_references]
+          c_assumption_references,
+          c_attribute_vocabulary, c_attribute_measurable,
+          c_attribute_conflicts, c_target_binds_criterion]
 
 
 def run(root: Path, state):

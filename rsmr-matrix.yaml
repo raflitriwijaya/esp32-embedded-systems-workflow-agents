@@ -1,0 +1,247 @@
+# RSMR x Stage mandatory matrix, and the open-debt ceiling per stage.
+#
+# EXTRACTED MECHANICALLY. Regenerate with tools/extract_rsmr.py rather
+# than editing: 200 hand-typed cells is 200 chances to make the agent
+# demand the wrong thing at a gate, with nothing able to notice.
+#
+# The parse is verified against SECTION5's own Totals table before this
+# file is written, so a misparse cannot ship silently.
+#
+# M  - must pass for the gate to clear; may not be deferred
+# D  - may fail if logged as DEBT-xxx with revisit_stage <= becomes_mandatory
+# NA - not applicable at that stage; no assessment required
+
+source: workflow-iot/WORKFLOW_SECTION5.md
+source_sha256: 79619c2a50410e17ee1f0499880277a2ff9121b2a444183f5a209a710017f9d3
+debt_source: workflow-iot/WORKFLOW_SECTION4.md
+debt_source_sha256: b11681a38e148b8edb2334f51971e7ec9d9bc777b3e1e10a36afd4bd70f0e1c8
+spec: SECTION5 sec.7.1 (matrix), sec.7.3 (deferral rules); SECTION4 sec.5.4 (debt ceiling)
+
+# Counted from the sec.7.1 matrix itself. Where SECTION5's own Totals
+# table disagrees, the matrix governs - see spec-defects.yaml
+# `rsmr-totals`. sec.7.2 and sec.7.3 both operate on individual cells.
+totals:
+  S1: { mandatory: 0, deferrable: 3, not_applicable: 37, total: 40 }
+  S2: { mandatory: 5, deferrable: 10, not_applicable: 25, total: 40 }   # SECTION5's Totals table says M=5, D=16, N/A=19 - defective, see rsmr-totals
+  S3: { mandatory: 24, deferrable: 8, not_applicable: 8, total: 40 }   # SECTION5's Totals table says M=28, D=12, N/A=0 - defective, see rsmr-totals
+  S4: { mandatory: 34, deferrable: 2, not_applicable: 4, total: 40 }   # SECTION5's Totals table says M=38, D=2, N/A=0 - defective, see rsmr-totals
+  S5: { mandatory: 40, deferrable: 0, not_applicable: 0, total: 40 }
+
+debt_limits:
+  S1:
+    max_open: null   # no ceiling at this stage
+    rule: "No limit."
+  S2:
+    max_open: 20
+    rule: "≤ 20 open items."
+  S3:
+    max_open: 10
+    rule: "≤ 10 open items. Zero items blocking the next gate."
+  S4:
+    max_open: 5
+    rule: "≤ 5 open items. Zero items at severity ≥ S3."
+  S5:
+    max_open: 5
+    rule: "≤ 5 open items. Zero S1/S2."
+
+criteria:   # 40 rows, document order preserved
+  - id: RSMR-01
+    dimension: Robust
+    area: "Error detection on fallible operations"
+    becomes_mandatory: S2
+    stages: { S1: D, S2: M, S3: M, S4: M, S5: M }
+  - id: RSMR-02
+    dimension: Robust
+    area: "Watchdog implemented"
+    becomes_mandatory: S3
+    stages: { S1: NA, S2: D, S3: M, S4: M, S5: M }
+  - id: RSMR-03
+    dimension: Robust
+    area: "Watchdog tested (induced hang → reset)"
+    becomes_mandatory: S3
+    stages: { S1: NA, S2: NA, S3: M, S4: M, S5: M }
+  - id: RSMR-04
+    dimension: Robust
+    area: "Peripheral fault recovery (I2C reset, etc.)"
+    becomes_mandatory: S3
+    stages: { S1: NA, S2: D, S3: M, S4: M, S5: M }
+  - id: RSMR-05
+    dimension: Robust
+    area: "Fault-injection testing"
+    becomes_mandatory: S4
+    stages: { S1: NA, S2: NA, S3: D, S4: M, S5: M }
+  - id: RSMR-06
+    dimension: Robust
+    area: "Queue-full handling (non-blocking, logged)"
+    becomes_mandatory: S3
+    stages: { S1: NA, S2: D, S3: M, S4: M, S5: M }
+  - id: RSMR-07
+    dimension: Robust
+    area: "HardFault/panic handler with log"
+    becomes_mandatory: S3
+    stages: { S1: NA, S2: D, S3: M, S4: M, S5: M }
+  - id: RSMR-08
+    dimension: Robust
+    area: "Graceful degradation (all failure modes)"
+    becomes_mandatory: S4
+    stages: { S1: NA, S2: NA, S3: D, S4: M, S5: M }
+  - id: RSMR-09
+    dimension: Robust
+    area: "Robustness regression test per field incident"
+    becomes_mandatory: S5
+    stages: { S1: NA, S2: NA, S3: NA, S4: D, S5: M }
+  - id: RSMR-10
+    dimension: Scalable
+    area: "Device identity not hardcoded"
+    becomes_mandatory: S2
+    stages: { S1: NA, S2: M, S3: M, S4: M, S5: M }
+  - id: RSMR-11
+    dimension: Scalable
+    area: "Config externalized (no hardcoded params)"
+    becomes_mandatory: S2
+    stages: { S1: D, S2: M, S3: M, S4: M, S5: M }
+  - id: RSMR-12
+    dimension: Scalable
+    area: "Config schema defined + validated"
+    becomes_mandatory: S3
+    stages: { S1: NA, S2: NA, S3: M, S4: M, S5: M }
+  - id: RSMR-13
+    dimension: Scalable
+    area: "Single build artifact per platform for all units"
+    becomes_mandatory: S3
+    stages: { S1: NA, S2: D, S3: M, S4: M, S5: M }
+  - id: RSMR-14
+    dimension: Scalable
+    area: "Provisioning procedure defined"
+    becomes_mandatory: S3
+    stages: { S1: NA, S2: D, S3: M, S4: M, S5: M }
+  - id: RSMR-15
+    dimension: Scalable
+    area: "Provisioning zero-touch or single-touch"
+    becomes_mandatory: S4
+    stages: { S1: NA, S2: NA, S3: D, S4: M, S5: M }
+  - id: RSMR-16
+    dimension: Scalable
+    area: "Fleet registry / per-device health"
+    becomes_mandatory: S4
+    stages: { S1: NA, S2: NA, S3: D, S4: M, S5: M }
+  - id: RSMR-17
+    dimension: Scalable
+    area: "OTA targeting / staged rollout"
+    becomes_mandatory: S5
+    stages: { S1: NA, S2: NA, S3: NA, S4: D, S5: M }
+  - id: RSMR-18
+    dimension: Scalable
+    area: "Fleet config drift monitoring"
+    becomes_mandatory: S5
+    stages: { S1: NA, S2: NA, S3: NA, S4: NA, S5: M }
+  - id: RSMR-19
+    dimension: Maintainable
+    area: "Naming convention adopted + documented"
+    becomes_mandatory: S2
+    stages: { S1: NA, S2: M, S3: M, S4: M, S5: M }
+  - id: RSMR-20
+    dimension: Maintainable
+    area: "Config constants in dedicated files"
+    becomes_mandatory: S2
+    stages: { S1: D, S2: M, S3: M, S4: M, S5: M }
+  - id: RSMR-21
+    dimension: Maintainable
+    area: "Comments explain \"why\" on non-trivial code"
+    becomes_mandatory: S3
+    stages: { S1: NA, S2: D, S3: M, S4: M, S5: M }
+  - id: RSMR-22
+    dimension: Maintainable
+    area: "Static analysis run (results recorded)"
+    becomes_mandatory: S3
+    stages: { S1: NA, S2: NA, S3: M, S4: M, S5: M }
+  - id: RSMR-23
+    dimension: Maintainable
+    area: "Static analysis clean (zero findings / baseline)"
+    becomes_mandatory: S4
+    stages: { S1: NA, S2: NA, S3: D, S4: M, S5: M }
+  - id: RSMR-24
+    dimension: Maintainable
+    area: "Compiler warnings zero (`-Wall -Werror`)"
+    becomes_mandatory: S3
+    stages: { S1: NA, S2: D, S3: M, S4: M, S5: M }
+  - id: RSMR-25
+    dimension: Maintainable
+    area: "Auto-formatting enforced"
+    becomes_mandatory: S4
+    stages: { S1: NA, S2: NA, S3: D, S4: M, S5: M }
+  - id: RSMR-26
+    dimension: Maintainable
+    area: "API semantic versioning"
+    becomes_mandatory: S3
+    stages: { S1: NA, S2: D, S3: M, S4: M, S5: M }
+  - id: RSMR-27
+    dimension: Maintainable
+    area: "Code reviewed by second engineer"
+    becomes_mandatory: S3
+    stages: { S1: NA, S2: D, S3: M, S4: M, S5: M }
+  - id: RSMR-28
+    dimension: Maintainable
+    area: "CHANGELOG updated per change"
+    becomes_mandatory: S3
+    stages: { S1: NA, S2: NA, S3: M, S4: M, S5: M }
+  - id: RSMR-29
+    dimension: Maintainable
+    area: "Zero-new-warning gate (Stage 5 baseline)"
+    becomes_mandatory: S5
+    stages: { S1: NA, S2: NA, S3: NA, S4: NA, S5: M }
+  - id: RSMR-30
+    dimension: Reliable
+    area: "Stack sizing with margin"
+    becomes_mandatory: S3
+    stages: { S1: NA, S2: NA, S3: M, S4: M, S5: M }
+  - id: RSMR-31
+    dimension: Reliable
+    area: "No post-init dynamic allocation"
+    becomes_mandatory: S4
+    stages: { S1: NA, S2: NA, S3: D, S4: M, S5: M }
+  - id: RSMR-32
+    dimension: Reliable
+    area: "Resource leak check (72 h run)"
+    becomes_mandatory: S3
+    stages: { S1: NA, S2: NA, S3: M, S4: M, S5: M }
+  - id: RSMR-33
+    dimension: Reliable
+    area: "Operating range stated + verified"
+    becomes_mandatory: S3
+    stages: { S1: NA, S2: NA, S3: M, S4: M, S5: M }
+  - id: RSMR-34
+    dimension: Reliable
+    area: "Thermal budget measured (not calculated)"
+    becomes_mandatory: S3
+    stages: { S1: NA, S2: NA, S3: M, S4: M, S5: M }
+  - id: RSMR-35
+    dimension: Reliable
+    area: "Flash/storage endurance calculated ≥ 5 yr"
+    becomes_mandatory: S3
+    stages: { S1: NA, S2: NA, S3: M, S4: M, S5: M }
+  - id: RSMR-36
+    dimension: Reliable
+    area: "MTBF target stated"
+    becomes_mandatory: S4
+    stages: { S1: NA, S2: NA, S3: D, S4: M, S5: M }
+  - id: RSMR-37
+    dimension: Reliable
+    area: "MTBF target demonstrated"
+    becomes_mandatory: S4
+    stages: { S1: NA, S2: NA, S3: NA, S4: M, S5: M }
+  - id: RSMR-38
+    dimension: Reliable
+    area: "Long-uptime (720 h / 30-day) stability"
+    becomes_mandatory: S4
+    stages: { S1: NA, S2: NA, S3: NA, S4: M, S5: M }
+  - id: RSMR-39
+    dimension: Reliable
+    area: "Fleet reliability trending"
+    becomes_mandatory: S5
+    stages: { S1: NA, S2: NA, S3: NA, S4: NA, S5: M }
+  - id: RSMR-40
+    dimension: Reliable
+    area: "Fleet MTBF vs. predicted comparison"
+    becomes_mandatory: S5
+    stages: { S1: NA, S2: NA, S3: NA, S4: NA, S5: M }

@@ -1,0 +1,661 @@
+# DRAFT - attribute to measurable-criterion mapping. NOT IN USE.
+#
+# Nothing reads this file. It becomes live only when the engineer reviews it,
+# sets `approved: true` on the entries that are right, and asks for it to be
+# applied. Until then the attribute checks continue to treat every non-RSMR
+# attribute as having no measurable criteria.
+#
+# WHY A DRAFT RATHER THAN A DIRECT EDIT
+# Asserting that R-ESP-04 measures Upgradeable is a tier-E3 claim: plausible,
+# unevidenced, and about to be machine-enforced. The framework forbids exactly
+# that. So each row carries its evidence and waits for a human.
+#
+# HOW THESE WERE PRODUCED
+# One reviewer per attribute, each reading the attribute's own definition from
+# quality-attributes.yaml plus all 30 SECTION5 ESP32 criteria, the SECTION3
+# sec.4.3 coverage bar, and 37 SECTION6 PIC criteria. Each was asked the strict
+# question: if this criterion passes, does that ESTABLISH anything about the
+# attribute - or does it merely mention a related word?
+#
+# THE REJECTIONS ARE THE POINT
+# 47 proposed, 117 rejected. A keyword
+# search over the same corpus proposed several of the rejected ones - including
+# R-ESP-06 for Safety, whose 'controlled shutdown' turns out to be defined
+# entirely over storage flushing and says nothing about the state of an
+# energized output. Reading the rejections is how you avoid re-litigating them.
+#
+# HOW TO REVIEW
+#   approved: true   - this criterion does measure this attribute
+#   approved: false  - it does not; move it to rejected with a reason
+#   Adjust `facet` where the reviewer's judgement of the limit differs.
+# An attribute whose approved list ends up empty stays UNVERIFIABLE by
+# construction, and that is a legitimate outcome to record rather than avoid.
+
+status: DRAFT
+reviewed_by: null
+reviewed_on: null
+sources:
+  - workflow-iot/WORKFLOW_SECTION5.md   # 30 ESP32 criteria
+  - workflow-iot/WORKFLOW_SECTION3.md   # sec.4.3 coverage bar
+  - workflow-iot/WORKFLOW_SECTION6.md   # 37 PIC audit criteria
+
+attributes:
+  Safety:
+    confidence: high
+    summary: "2 proposed (0 full, 2 partial), 14 rejected"
+    proposed:
+      - id: "PIC-S4-08"
+        source: SECTION6
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "hazard/failure-mode analysis coverage of the actuator subsystem — documented effect, mitigation and severity per failure mode; documentary only, no behavioural verification"
+        quoted: "**PIC-S4-08:** Are all FMEA-lite records complete with no \"not analyzed\" entries at severity ≥ S3? | FMEA-lite record (§3.1) covers every subsystem (sensor, actuator, communication, power, storage, timing). Every failur…"
+        why: "This is the only criterion in SECTION3/5/6 that puts the actuator in scope at all — the word \"actuator\" occurs exactly once across all three files, here (grep count: SECTION3=0, SECTION5=0, SECTION6=1). It measures more than mention: it has a binary pass condition (zero \"not analyzed\" entries at severity ≥ S3) over a required artifact, a…"
+      - id: "SECTION6 §3.1 (FMEA-Lite Failure Mode Table — Detection Method + Detection Latency columns, and the NONE prohibition)"
+        source: SECTION6
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "the detection half of bounded reaction time — a declared detection method and detection latency per failure mode, with no undetectable failure modes at severity ≥ S2; the reaction half and the measur…"
+        quoted: "| ID | Failure Mode | Effect | Severity | Detection Method | Detection Latency | Mitigation | Status | Verified (Date/Test) | ... NONE = not detectable with current design (must be upgraded to SELF or HW before Stage 4 …"
+        why: "Bounded reaction time to a hazardous condition decomposes into detect-then-react. This is the only place in the three sections where the detect half is required to exist and to carry a number: every failure mode must name a detection method and state a Detection Latency, and NONE (undetectable with current design) is prohibited at severi…"
+    rejected:   # a keyword search matches these; they do not measure it
+      - id: "R-ESP-06"
+        why_not: "The strongest trap. \"Brownout triggers controlled shutdown ... not an uncontrolled reset\" looks like fail-safe de-energization on loss of power, but the shutdown is defined entirely over storage — \"(flush NVS, close filesystem)\" …"
+      - id: "R-ESP-04"
+        why_not: "Matches the definition's \"independent monitoring\" by keyword only. TWDT monitors *tasks*, not actuators; it is in-band (the same MCU, the same firmware image); and its remedy is a reset, i.e. restore function. The Safety definiti…"
+      - id: "PIC-S4-06"
+        why_not: "Matches \"bounded reaction time\" by keyword. What is bounded and measured is time to *recovery of operation* — \"hang induced → watchdog reset within 2× configured timeout. Recovery time (reset → operational) measured\". That is a f…"
+      - id: "PIC-S3-04"
+        why_not: "Same shape as PIC-S4-06 at Stage 3: \"watchdog reset within 2× configured timeout. Recovery time (reset → first telemetry message) measured\". Time-to-telemetry is a Reliability/Observability bound, not a time-to-safe-state bound."
+      - id: "PIC-S4-04"
+        why_not: "The yaml has Safety depends_on Testable citing fault injection, so a graph-walk lands here — but a satisfied dependency is not a measurement of the dependent attribute. The verification target is stated as \"recovery was verified\"…"
+      - id: "PIC-S3-10"
+        why_not: "\"Error-recovery paths exercised\" over I2C NACK/timeout, MQTT disconnect, WiFi disconnect, queue-full. Recovery of a comms/sensor path, measured in a run log. Robust/Reliable, and none of the listed conditions is a hazard."
+      - id: "R-ESP-09"
+        why_not: "The prompt's own example case. Reverting to a last-known-good image on a failed boot measures anti-bricking (Reliable/Upgradeable). It establishes nothing about harm under fault. Note the inverse: quality-attributes.yaml records …"
+      - id: "S-ESP-06"
+        why_not: "\"Validated against schema before application\" and \"out-of-range value; verify rejection\" read like bounding a dangerous command, and the yaml has Secure reinforces Safety via \"preventing forged commands prevents unsafe actuation\"…"
+      - id: "RL-ESP-05"
+        why_not: "Keyword-adjacent to \"harm to equipment\". It measures a *design margin calculation* for in-spec operation — worst-case ambient + enclosure rise + self-heating ≤ T_j max with ≥ 10°C margin — computed in the absence of fault. Safety…"
+      - id: "RL-ESP-01"
+        why_not: "\"The device schedules a controlled restart\" below the critical threshold reads as a defined safe state. It is a defined *recovery* action on resource exhaustion — fail-functional. Nothing specifies output or actuator state across…"
+      - id: "M-ESP-01"
+        why_not: "Reached via the yaml's Maintainable reinforces Safety edge (\"isolated safety logic is auditable\"). The criterion enumerates the required modules — hal_sensor/, hal_comm/, hal_time/, hal_storage/ — and there is no safety module an…"
+      - id: "SECTION3 §4.3 Coverage Bar"
+        why_not: "A Testable metric, and scoped away from the relevant layer: \"Coverage is measured on the **agnostic core only** ... Hardware-touching port code is validated by manual test procedure and HIL, not by coverage percentage\" — i.e. the…"
+      - id: "SECTION6 §1.3 waiver constraint (also §7 checklist: \"No waiver for a safety-critical deficiency (explicitly prohibited)\")"
+        why_not: "A literal keyword match — \"A waiver may not be issued for a safety-critical deficiency at any stage (safety = potential for injury, fire, or unrecoverable data loss)\" — and a governance constraint on the waiver process, not a mea…"
+      - id: "SECTION5 M-15 (\"Code reviewed by second engineer (Stage 3+); PIC for safety/security (Stage 4+)\")"
+        why_not: "Keyword match on \"safety\". It assigns a reviewer role at a stage. It states no property of the system, no check method, and no pass condition about behaviour under fault."
+    gap: "Start with the authoritative signal: quality-attributes.yaml itself records Safety as `in_rsmr: false`, `criteria_prefix: null # no measurable criteria exist`, `criteria_esp32: []`. My reading confirms it. ZERO of the 30 ESP32 SECTION5 criteria measure Safety. The only coverage anywhere is documentary, inside SECTION6's FMEA-lite instrument, and it is partial on two of the four pillars. Facet by facet, against the d…"
+
+  Deterministic:
+    confidence: medium
+    summary: "4 proposed (0 full, 4 partial), 15 rejected"
+    proposed:
+      - id: "RL-ESP-02"
+        source: SECTION5
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "No dynamic allocation in hot paths (one of five named requirements). Establishes nothing about WCET magnitude, task priorities, unbounded waits, or priority inversion — and note that a *bounded* allo…"
+        quoted: "criterion: \"No unbounded `malloc`/`calloc` in task loops or ISR paths. All long-lived allocations are made at init. Temporary allocations in task loops must be bounded in size and frequency, or use `alloca()` (stack-all…"
+        why: "The Deterministic definition names five requirements: bounded WCET, fixed task priorities, no unbounded waits, no dynamic allocation in hot paths, no priority inversion. This criterion measures the fourth one literally and directly — 'task loops or ISR paths' IS the hot path, and the pass condition is enforceable by grep, not by assertio…"
+      - id: "PIC-S3-09 (+ SECTION6 §4.1 template, §3 Timing and Clock Range)"
+        source: SECTION6
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "Interrupt-entry latency worst case, plus clock/timing error budget for the most timing-critical peripheral. Nothing about task-level WCET, scheduling jitter, deadline conformance, or end-to-end senso…"
+        quoted: "PIC row: \"**PIC-S3-09:** Is the operating-range documentation complete per §4 of this section? | Operating-range record (§4.1 template) for each platform, with all fields populated. Temperature, voltage, and timing rang…"
+        why: "This is the only place in the entire corpus where a worst-case timing figure must actually be measured on hardware against a stated bound, with the worst case explicitly defined as 'all interrupts enabled (including higher-priority ISRs masking)' — i.e. bounded response time under interference from unrelated system activity, which is the…"
+      - id: "PIC-S4-07 (+ SECTION6 §4.1 template, §3 Timing and Clock Range)"
+        source: SECTION6
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "Conformance of the documented timing envelope (ISR-entry latency, clock error budget, watchdog reset time) across the pilot batch — and only from Stage 4 onward. Silent on task WCET, priority assignm…"
+        quoted: "\"**PIC-S4-07:** Is the operating-range validation complete across the pilot batch? | Every operating-range parameter (§4.1 template) validated with measured data from the pilot batch (≥ 10 units). Corner-case testing: m…"
+        why: "This is PIC-S3-09 upgraded from documentation-completeness to measured conformance: 'All units within stated operating envelope' turns the §3 Timing and Clock Range rows (ISR latency ≤ <x> μs, timing error budget, watchdog reset time) into a pass/fail bar across ≥ 10 units, and adds a corner-case condition (max RF duty cycle at max ambie…"
+      - id: "PIC-S3-04 (and its Stage-4 extension PIC-S4-06)"
+        source: SECTION6
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "Bounded, measured reaction time of the fault-detection and recovery path only (hang → reset → first telemetry). Establishes nothing about the timing of the system's normal operation, which is what th…"
+        quoted: "\"**PIC-S3-04:** Is the watchdog tested and recovery time measured? | Test log: induced hang in each monitored task → watchdog reset within 2× configured timeout. Recovery time (reset → first telemetry message) measured …"
+        why: "Included on the narrow ground that the measured quantity is a *time compared against a bound*, twice: detection latency bounded at 2× configured timeout, and recovery time bounded at a stated target. That is the determinism form — an operation completing within a bounded, predictable time, demonstrated by measurement rather than asserted…"
+    rejected:   # a keyword search matches these; they do not measure it
+      - id: "R-ESP-04"
+        why_not: "The strongest-looking false positive in the set. TWDT subscription is fault detection: it proves a hung task will be caught and reset, which is Robustness (SECTION5 §2.1 explicitly scopes 'task miss deadline, ISR overrun, missed …"
+      - id: "R-ESP-03"
+        why_not: "Full of timing vocabulary ('exponential backoff', 'no reconnect interval < ICD-stated minimum', 'no tight loop') and measures interval conformance — but the property secured is that the device does not hammer a dead broker, i.e. …"
+      - id: "R-ESP-02"
+        why_not: "Its check step contains a genuine time bound — 'verify normal operation resumes within REQ-defined reconnect time' — but the criterion text and the pass condition ('WiFi disconnect → graceful degradation, no crash') drop it entir…"
+      - id: "R-ESP-05"
+        why_not: "Duty cycle and scan window are timing parameters, and the criterion is about one subsystem interfering with another — the closest keyword match to 'independent of unrelated system activity'. But the quantity protected is WiFi *th…"
+      - id: "RL-ESP-01"
+        why_not: "Concerns the heap, so it looks like a companion to RL-ESP-02, but it measures heap *health over time* (largest_free_block trended, warn at 32 KB, controlled restart at 8 KB) and reacts with a restart. That is Reliable — degradati…"
+      - id: "RL-ESP-06"
+        why_not: "Frequently mistaken for a determinism criterion because it is about static sizing and FreeRTOS tasks, and because `xTaskCreatePinnedToCore()` (core pinning — a real determinism lever) appears in the text. But the measured quantit…"
+      - id: "RL-ESP-04"
+        why_not: "A subtle keyword trap: SECTION6 §4.3's cross-reference table maps the row 'Clock accuracy over temperature — XTAL ±25 ppm (ESP32 module) + aging' to 'RL-ESP-04 (indirect via RF)'. Read the criterion itself and it contains no cloc…"
+      - id: "M-ESP-05"
+        why_not: "The best candidate for the second half of the definition, 'produces the same result for the same inputs' — pinning the ESP-IDF version so a mismatch is a 'build failure, not silent behavioral change'. But this is build/toolchain …"
+      - id: "M-ESP-06"
+        why_not: "Logging appears in the determinism conflict graph ('logging/tracing inject I/O latency and jitter into timed paths'), so a graph-following search reaches it — but the criterion measures logging *consistency* (per-component TAG, n…"
+      - id: "S-ESP-06"
+        why_not: "Names 'sample period' — a timing parameter — but measures NVS schema validation of runtime config updates and rejection of out-of-range values (Scalable/Robust). If anything it points the wrong way: a downlink-mutable sample peri…"
+      - id: "SECTION5 §5.3 stage-scaling row 'Clock/timing drift'"
+        why_not: "Textually the most determinism-shaped sentence in SECTION5 — Stage 3: 'Timing budget calculated for all timing-critical paths. Measured jitter on UART/SPI clocks within budget.' Rejected on two grounds. (1) Substance: the measure…"
+      - id: "SECTION3 §4.3 (coverage bar)"
+        why_not: "Reachable via the yaml edge 'Testable reinforces Deterministic' and via the phrase 'All state machine transitions must be exercised', which sounds like exhaustive behavioral determinism. It is test breadth, not timing: the causal…"
+      - id: "PIC-S2-01 / PIC-S5-08"
+        why_not: "'Is the watchdog strategy defined and appropriate for the target platform(s)?' is a design-review question with no measured quantity; 'Is the watchdog reset rate per device within threshold?' is a fleet reliability metric (how of…"
+      - id: "PIC-S3-01 / PIC-S3-02"
+        why_not: "The 72-hour run with zero unhandled exceptions or resets is the flagship Reliable evidence and proves uninterrupted operation over an interval. It cannot detect a determinism failure: a control loop can miss its deadline on every…"
+      - id: "PIC-S4-10"
+        why_not: "'Resource budgets ... documented with measured peaks and margins' with hard margin thresholds looks rigorous enough to cover bounded behavior generally, and 'queue depth ≥ 100% margin' is adjacent to the queuing-jitter conflict e…"
+    gap: "Nothing in these sections measures determinism on the ESP32 in the sense the definition means — bounded WCET for application code. Specifically unmeasured, with no criterion anywhere in the 30-item ESP32 set, the SECTION3 coverage bar, or the 36 PIC criteria: 1. WCET. No criterion requires, calculates, measures, or bounds the worst-case execution time of any task, ISR, or callback. The only measured worst-case time …"
+
+  Portable:
+    confidence: high
+    summary: "5 proposed (0 full, 5 partial), 13 rejected"
+    proposed:
+      - id: "SECTION3 §4.3 Coverage Bar — Stage Scaling (header sentence + exclusion list)"
+        source: SECTION3
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "Existence and off-target executability of the platform-agnostic layer — quantified only as line/branch coverage of that layer. It says nothing about how much of the application's total logic lives in…"
+        quoted: "Coverage is measured on the **agnostic core only** (host-compiled C + Python). Hardware-touching port code is validated by manual test procedure and HIL, not by coverage percentage. … **What is excluded from coverage me…"
+        why: "This is the only bar in the whole set whose pass condition can only be satisfied if a body of application logic actually compiles and executes on a non-target environment (x86 host, gcov/pytest-cov). Portability per the definition is 'application logic should be fully portable; only a thin port layer is hardware-bound' — a CI gate that r…"
+      - id: "M-ESP-01"
+        source: SECTION5
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "Port-layer existence and per-module decomposition on the ESP32 side. It does not check the other side of the seam (that `core/` is free of ESP-IDF), does not check that these headers match `core/inc/…"
+        quoted: "ESP-IDF component structure: every port module is an ESP-IDF component with its own `CMakeLists.txt`, `include/` directory, and source files. No monolithic `components/custom/` that mixes concerns | Directory check: `po…"
+        why: "The check method verifies the physical existence of the port layer and its decomposition into the four named HAL modules, each with a published `include/` interface. That is the structural precondition the definition names — 'isolating hardware- and OS-specific dependencies behind a stable interface (a hardware abstraction layer / port l…"
+      - id: "RL-ESP-06"
+        source: SECTION5
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "One single, specific FreeRTOS-API divergence between ESP-IDF and vanilla FreeRTOS (stack depth in bytes vs words). No other API divergence — timers, task creation affinity, queue semantics, tick rate…"
+        quoted: "FreeRTOS task stack high-water-mark: every task's stack is measured via `uxTaskGetStackHighWaterMark()`; reported in telemetry; adjusted to ≥ 125% of measured peak. ESP-IDF unit note: `xTaskCreate()` / `xTaskCreatePinne…"
+        why: "The second half of this criterion is a porting check, not a reliability check: it targets the exact failure mode the definition warns about — 'depending on standards … (the FreeRTOS API) rather than vendor specifics' when the vendor's build of that standard API silently changes a unit. The named failure ('an STM32 figure copied to ESP32 …"
+      - id: "PIC-S2-05"
+        source: SECTION6
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "Unit-semantics divergence across RTOS API variants, at the design-documentation level. It is a documentation gate (Stage 2), verified by review of stated figures, not by anything that proves the code…"
+        quoted: "**PIC-S2-05:** Is the stack sizing strategy documented? | Every FreeRTOS task has a stack size stated **with its unit explicit, matching the API actually called**: ESP-IDF `xTaskCreate()` / `xTaskCreatePinnedToCore()` =…"
+        why: "The evidence clause makes cross-platform transfer itself the object of the gate: 'A figure stated without its unit, or carried between platforms unconverted, is a finding.' A PIC finding is raised for a porting error even when the resulting stack size happens to be adequate on the current target, so what is being measured is the safety o…"
+      - id: "R-ESP-01"
+        source: SECTION5
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "Error-type abstraction at the port boundary (no `esp_err_t` above the seam), and only for I2C/SPI/UART driver calls. It does not cover WiFi/MQTT/NVS/OTA return values, and covers no other vendor type…"
+        quoted: "Every ESP-IDF driver call's return value is checked against `ESP_OK`; non-OK returns are converted to the shared `error_code_t` (SECTION 2 §6.1) and returned to caller | Code review: all `i2c_master_*()`, `spi_device_*(…"
+        why: "Two things are asserted, and only one of them is Robustness. The conversion clause — vendor `esp_err_t` values are translated into the shared cross-platform `error_code_t` and that is what crosses the seam to the caller — is a portability mechanism: it keeps the vendor's error vocabulary from leaking into the agnostic core, which is prec…"
+    rejected:   # a keyword search matches these; they do not measure it
+      - id: "M-ESP-03"
+        why_not: "The strongest keyword lure in the set — its check method literally reads 'consistency with STM32 naming convention (shared agnostic core)'. But what passes is naming *style* (`v` prefix, `x` prefix, `snake_case`), not interface c…"
+      - id: "M-ESP-06"
+        why_not: "Matches on the Observable→Portable link 'a portable logging interface swaps backends per platform', but it measures the opposite: it mandates the ESP-IDF vendor macro (`ESP_LOGI(TAG, ...)`) directly in component sources and a per…"
+      - id: "M-ESP-02"
+        why_not: "Config/logic separation is listed in the graph as reinforcing Portable, but the separation this criterion measures is between two ESP32-specific mechanisms (Kconfig for build-time, NVS for runtime). Both are vendor facilities. If…"
+      - id: "M-ESP-05"
+        why_not: "Pins the ESP-IDF version and fails the build on mismatch. This is toolchain reproducibility — Maintainable/Reliable ('version mismatch → build failure, not silent behavioral change'). Freezing a dependency on one vendor SDK versi…"
+      - id: "M-ESP-07"
+        why_not: "`-Wall -Werror` catches some portability-hostile constructs incidentally, but the criterion's subject and pass condition are 'zero project-component warnings' on one compiler for one target. A clean ESP-IDF GCC build is not evide…"
+      - id: "R-ESP-09"
+        why_not: "A substring-'port' magnet (`esp_ota_get_boot_partition()`, 'boot partition') and an OTA-image criterion of exactly the kind flagged in the brief. It measures anti-bricking: bootloader reverts to the last-known-good image within `…"
+      - id: "S-ESP-04"
+        why_not: "'partition' keyword throughout, and it concerns `partitions.csv` layout. What passes is that NVS survives OTA and factory reset does not brick the device — data/firmware isolation on one ESP32 flash map. The mechanism measured (a…"
+      - id: "S-ESP-05"
+        why_not: "Reads like 'one binary runs everywhere' — 'OTA image is the same binary for all targeted devices — targeting is server-side, not compiled into the image'. But the fleet in question is homogeneous ESP32 units; this is the absence …"
+      - id: "S-ESP-01"
+        why_not: "'MAC is not hardcoded and not compiled into the binary' resembles the config-externalisation clause that reinforces portability, but the check mandates `esp_efuse_mac_get_default()` — an ESP32-only API — as the identity source. P…"
+      - id: "S-ESP-06"
+        why_not: "NVS-stored config with a schema version and validated downlink updates. Config/logic separation appears in the graph as a Portable reinforcement, but what this criterion actually gates is runtime reconfigurability and rejection o…"
+      - id: "PIC-S2-01"
+        why_not: "'appropriate for the target platform(s)' — the plural is the lure. The object measured is the watchdog strategy's adequacy, which is Reliable. A watchdog strategy can be fully defined and platform-appropriate while being written …"
+      - id: "RL-ESP-04 and RL-ESP-05"
+        why_not: "'module-level rating', 'ESP32-S3-WROOM-1', hardware variants and datasheet numbers make these look variant-aware. They measure RF link-budget margin (≥ 6 dB) and thermal margin (≥ 10 °C) for one specific module — Reliable. Establ…"
+      - id: "PIC-S4-05 / PIC-S5-06 / RL-ESP-08"
+        why_not: "OTA success and rollback rates (≥ 99% / ≤ 5%). Fleet-wide update health: Reliable feeding Upgradeable. Grouped here because 'OTA path' and 'update mechanism per variant' appear in the Portable→Upgradeable reinforcement text; none…"
+    gap: "Start from the source of truth: quality-attributes.yaml gives Portable `criteria_prefix: null` and `criteria_esp32: []`, with the file's own header note that only the four RSMR attributes have measurable criteria and that a requirement claiming any other attribute is 'UNVERIFIABLE by construction'. Every proposal above is therefore incidental — a portability fact that happens to fall out of a criterion written for R…"
+
+  Observable:
+    confidence: high
+    summary: "9 proposed (0 full, 9 partial), 21 rejected"
+    proposed:
+      - id: "M-ESP-06"
+        source: SECTION5
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "Log-emission hygiene only: tag attribution and level control. It says nothing about log CONTENT (no required fields, timestamps, severity discipline, or event IDs), nothing about persistence across r…"
+        quoted: "All ESP_LOG macros use the component's `static const char *TAG`; TAG is the component name (e.g., `\"hal_sensor\"`). Log level per component is configurable via `idf.py menuconfig` → `CONFIG_LOG_MAXIMUM_LEVEL` | Code revi…"
+        why: "This is the only criterion in the ESP32 set that governs the log stream itself rather than a fault behaviour. Passing it establishes that every log line carries a machine-filterable component identity and that no output escapes the logging framework via raw printf — i.e. the external output exists and is attributable to a source module. …"
+      - id: "RL-ESP-06"
+        source: SECTION5
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "One metric only (per-task stack high-water-mark). No sampling interval, no schema, no transport requirement, and no other counter or state variable is pulled into the telemetry contract by it."
+        quoted: "FreeRTOS task stack high-water-mark: every task's stack is measured via `uxTaskGetStackHighWaterMark()`; reported in telemetry; adjusted to ≥ 125% of measured peak. … | Code review: … Telemetry includes per-task waterma…"
+        why: "The clause 'reported in telemetry' plus the check line 'Telemetry includes per-task watermark in bytes' make this the ONLY ESP32 SECTION5 criterion that requires an internal runtime value to be exported off the device. Passing it establishes that a specific piece of internal state (per-task stack headroom) is inferable externally without…"
+      - id: "RL-ESP-01"
+        source: SECTION5
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "One metric (largest_free_block) with a log-on-threshold rule. The trend is only 'trended' locally; nothing requires the series or the warning to leave the node, so the after-the-fact diagnosis still …"
+        quoted: "Heap fragmentation monitored: `heap_caps_get_info()` or `mallinfo()` called periodically; `largest_free_block` trended. If `largest_free_block` drops below a configurable threshold (default: 32 KB), a warning is logged.…"
+        why: "Passing this establishes designed-in periodic instrumentation of an internal value that is otherwise invisible from outside (heap fragmentation), plus a threshold-triggered external output ('a warning is logged'). The check verifies the monitoring task exists — so it enforces the instrumentation, not merely the recovery action. Without i…"
+      - id: "RL-ESP-07"
+        source: SECTION5
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "One reset cause (brownout) only. Panic, TWDT, software and power-on resets are not counted or reported by this or any other ESP32 criterion. The check also names only the dashboard (a backend artifac…"
+        quoted: "Brownout reset count trended. More than N brownout resets in M hours → investigation triggered (N and M are configurable fleet-health thresholds). Brownout cause is investigated: is the power supply undersized? Is a per…"
+        why: "A brownout reset is internal state that vanishes at reset unless it is counted, persisted, and reported. The check requires a per-device counter visible on a fleet dashboard — that is exactly 'infer internal state from external outputs on a node you cannot physically reach', and the diagnosis is explicitly after-the-fact (the reset alrea…"
+      - id: "RL-ESP-08"
+        source: SECTION5
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "Rollout-outcome metrics only (success rate, rollback rate). It establishes nothing about steady-state instrumentation, and it does not require the FAILURE REASON to be reported — a 5% rollback rate i…"
+        quoted: "OTA update reliability: OTA success rate tracked per device and fleet-wide. Target: ≥ 99% OTA success rate on first attempt. Rollback rate tracked; > 5% rollback rate → OTA campaign paused and investigated | Fleet dashb…"
+        why: "'tracked per device' plus a per-campaign dashboard means the outcome of an update — including a rollback, which is a decision made by the bootloader on the device — must be reported outward and attributed to a specific unit. Rollback in particular cannot be known server-side from a delivery log; the device has to report which partition i…"
+      - id: "PIC-S5-05"
+        source: SECTION6
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "Environmental/physical health telemetry only (temperature, voltage, RSSI). No software-state visibility: no task state, error counters, queue depths, or fault records. It is also Stage 5 only, so it …"
+        quoted: "**PIC-S5-05:** Are operating-range excursions detected and investigated? | Fleet environmental telemetry (temperature, voltage, RSSI) trended against the stated operating envelope (§4). Any device operating outside enve…"
+        why: "The evidence column requires an unconditional per-device environmental telemetry stream (temperature, voltage, RSSI) sampled at an interval and compared to the declared envelope. None of those three values is observable from outside the device — each requires designed-in sensing and uplink. Passing this establishes that deployed nodes re…"
+      - id: "PIC-S5-04"
+        source: SECTION6
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "Resource-metric telemetry only (heap, stack, RSS, FD count), and only as a stability judgement. It requires no fault records, no error counters, and no way to diagnose WHY a device's trend went upwar…"
+        quoted: "**PIC-S5-04:** Are resource trends (stack, heap, RSS, FD count) stable across the fleet? | Fleet-wide resource trending: per-device heap watermark, stack high-water-mark, RSS, FD count over trailing 90 days. Any device …"
+        why: "This question is unanswerable without per-device resource telemetry aggregated over 90 days — the evidence column says so explicitly. Unlike its bench-stage twin PIC-S3-06, it cannot be satisfied with a serial console on a unit in front of you; the population is the deployed fleet. Passing it therefore establishes that internal memory st…"
+      - id: "PIC-S5-08"
+        source: SECTION6
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "Watchdog resets only, and only as a rate. Which task starved the TWDT, and what it was doing, is not made inferable — so the criterion tells you a device is resetting but not why, which is half of ob…"
+        quoted: "**PIC-S5-08:** Is the watchdog reset rate per device within threshold? | Fleet watchdog reset counter per device. Threshold: ≤ 1 watchdog reset per device per 30 days. Any device exceeding threshold → investigation. Any…"
+        why: "A watchdog reset erases the evidence of itself; a per-device counter over 30 days requires the reset cause to be captured at boot, persisted across the reset, and uplinked. The evidence column demands exactly that counter per device. Passing establishes that one class of internal fault event survives its own reset and becomes externally …"
+      - id: "PIC-S3-10"
+        source: SECTION6
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "Log sufficiency for four enumerated fault paths, on a bench unit during a 72-hour run. It is Stage 3 and local — nothing carries the requirement to remote retrieval, and the fault list is closed (a f…"
+        quoted: "**PIC-S3-10:** Are all error-recovery paths exercised in the 72-hour run log? | The run log must contain evidence of at least one recovery from each expected fault condition: I2C NACK/timeout, MQTT disconnect, WiFi disc…"
+        why: "This is the only criterion anywhere that tests LOG SUFFICIENCY rather than log existence: the log must, on its own, contain evidence that each named fault path executed and recovered. Passing it establishes that four specific internal control-flow events (I2C NACK, MQTT disconnect, WiFi disconnect, queue-full) are inferable from external…"
+    rejected:   # a keyword search matches these; they do not measure it
+      - id: "R-ESP-02"
+        why_not: "The near-miss, and worth the engineer's attention. The check verifies 'oldest messages dropped with counter increment' — but the pass condition is 'WiFi disconnect → graceful degradation, no crash', pure Robustness, and nothing r…"
+      - id: "R-ESP-08"
+        why_not: "The pass condition says 'Filesystem write failure → logged + retried, not silent data loss', so a keyword match is guaranteed — but the stated check is only 'Code review: all `esp_spiffs_*()` or `esp_littlefs_*()` calls have retu…"
+      - id: "R-ESP-06"
+        why_not: "'Brownout → controlled shutdown, not mystery reset' reads like diagnosability, but the check is 'Check sdkconfig: CONFIG_ESP_BROWNOUT_DET=y … check app_main.c: brownout callback registered'. What is verified is that a callback ru…"
+      - id: "R-ESP-07"
+        why_not: "'Heap poisoning enabled; corruption detected at `free()` not at next `malloc()`' improves fault LOCALISATION, but it is a build-time debug aid that panics in place. The attribute definition explicitly excludes debugging ('observa…"
+      - id: "R-ESP-09"
+        why_not: "Mentions OTA and bootloader partitions, and OTA is genuinely coupled to Observable elsewhere — but this criterion establishes only that a bad image is reverted within a boot-count budget. If it passes, nothing is established abou…"
+      - id: "S-ESP-01"
+        why_not: "Hardware-derived device identity is a PRECONDITION for attributing telemetry to a unit, but the criterion measures where the ID comes from ('hardware-derived or NVS-provisioned, not compiled'), not that anything about the device'…"
+      - id: "S-ESP-03"
+        why_not: "'client IDs unique across fleet' will match any fleet-observability keyword search, and unique IDs are what make per-device dashboards possible. But the pass condition is about MQTT config not being compiled in and IDs not collid…"
+      - id: "S-ESP-06"
+        why_not: "Concerns the MQTT downlink (commands INTO the device) with schema validation — the control direction, not the observation direction. Rejecting an out-of-range config value establishes input validation (Robust/Secure)."
+      - id: "M-ESP-04"
+        why_not: "Matches on 'traceable' ('sdkconfig changes traceable in git history') but this is build-configuration provenance in version control, not runtime state inference. Nothing about a deployed node becomes visible because its sdkconfig…"
+      - id: "RL-ESP-03"
+        why_not: "Requires every `nvs_set_*()` call to be categorised by write frequency with a lifetime calculation. That is a design-time analysis performed by reading code, not a measurement taken from a running device. No counter, no log, no r…"
+      - id: "PIC-S3-03"
+        why_not: "'Were all logged anomalies classified?' presupposes a log and measures the TRIAGE of what is already in it. It can pass vacuously: a device with no instrumentation logs no anomalies, and zero anomalies are all correctly classifie…"
+      - id: "PIC-S3-05"
+        why_not: "Its evidence names a `uxTaskGetStackHighWaterMark()` log for every task, but the pass condition is the ≥25% margin — a resource/reliability outcome. The measurement can be taken over JTAG on a unit sitting on the bench. RL-ESP-06…"
+      - id: "PIC-S3-06"
+        why_not: "Requires heap trended at ≥1 sample/hour for 72 hours, so instrumentation is implied — but the pass condition is 'no monotonic decrease after initialization', a Reliable outcome, and on a bench unit the samples can come from a ser…"
+      - id: "PIC-S5-01"
+        why_not: "'Fleet health dashboard: per-device uptime percentage' looks like telemetry, but uptime/downtime is inferable at the broker from connection presence with zero device-side instrumentation. What passes is an availability number (Re…"
+      - id: "PIC-S5-03"
+        why_not: "Postmortems for S1/S2 incidents match the definition's phrase 'diagnose a fault after the fact' — but the criterion measures whether the postmortem DOCUMENT was written, a SECTION 4 process outcome. It does not measure whether th…"
+      - id: "PIC-S5-06"
+        why_not: "Duplicates RL-ESP-08's thresholds as a pass/fail on the RATE (≥99% success, ≤5% rollback) — an Upgradeable/Reliable outcome. RL-ESP-08's check is the one that demands the per-device tracking and campaign dashboard, so that is whe…"
+      - id: "PIC-S5-09"
+        why_not: "Would look like the strongest field-telemetry criterion ('actual field write rates') except that its evidence column opens with 'If field write rate telemetry is available:' — the telemetry is explicitly OPTIONAL. A conditional c…"
+      - id: "PIC-S4-01"
+        why_not: "Its evidence lists 'periodic health telemetry' among the burn-in log contents, so a keyword search hits it — but the criterion measures whether ≥10 pilot units PASSED a 72-hour burn-in. The telemetry is one item in an evidence bu…"
+      - id: "PIC-S4-05"
+        why_not: "'Is the OTA update path reliability verified?' — mentions OTA, measures Reliable/Upgradeable. Verifying the update path works establishes nothing about what the fleet can see during or after a rollout."
+      - id: "PIC-S2-03"
+        why_not: "'Is the error-detection strategy defined for every fallible operation?' — detection is a prerequisite for reporting, and this is the most tempting adjacency in SECTION 6. But detecting an error and REPORTING it are different prop…"
+      - id: "SECTION3 §4.3 Coverage Bar"
+        why_not: "Coverage percentages on the agnostic core, including 'All error-return paths must be exercised' and 'All state machine transitions must be exercised', measure Testable. Exercising an error path in CI establishes nothing about whe…"
+    gap: "Observable has NO criteria prefix and no criteria list of its own (quality-attributes.yaml: `criteria_prefix: null`, `criteria_esp32: []`), so everything above is borrowed from criteria written to measure something else. Only ONE of the 30 ESP32 SECTION 5 criteria even contains the word telemetry (RL-ESP-06). What nothing measures: 1. RESET CAUSE. STM32 has RL-S32-07 — \"Reset cause logged at boot (`RCC_CSR` register…"
+
+  Testable:
+    confidence: high
+    summary: "6 proposed (0 full, 6 partial), 19 rejected"
+    proposed:
+      - id: "SECTION3 §4.3 — coverage bar rows (Functional Prototype / Pre-Production / Production-Ready)"
+        source: SECTION3
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "host-run automated unit-test coverage of the agnostic core (line/branch reach, API-function completeness, error-return and state-transition path reach). Says nothing about integration tests, HIL, fau…"
+        quoted: "Coverage is measured on the **agnostic core only** (host-compiled C + Python). Hardware-touching port code is validated by manual test procedure and HIL, not by coverage percentage. | **Functional Prototype** | ≥ 60% li…"
+        why: "This is the only item in the whole pool whose pass condition is a property of the verification apparatus rather than of runtime behaviour. It cannot be satisfied unless the logic actually is isolated from I/O and host-compilable (the bar is measured on host-compiled C + Python), unless every public API function has an automated test case…"
+      - id: "SECTION3 §4.3 — Field-Deployed Maintenance row"
+        source: SECTION3
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "defect reproducibility as an automated regression test, and non-regression of test reach per PR. Applies only to bug fixes and only at Stage 5; proves nothing about paths no bug has yet been filed ag…"
+        quoted: "| **Field-Deployed Maintenance** | ≥ 90% line coverage maintained. Any bug fix must include a regression test that fails on the unfixed code and passes on the fix. Coverage must not decrease — delta measured per PR. | S…"
+        why: "Separated from the rows above because it measures a different thing: not how much is covered, but whether each defect is made reproducible as an automated assertion. 'Fails on the unfixed code and passes on the fix' is a demonstrated test oracle — it proves the defect's behaviour is observable and assertable from the harness, which is pr…"
+      - id: "PIC-S4-04"
+        source: SECTION6
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "fault-injection reach over error paths (completeness bounded by the FMEA-lite record at severity ≥ S3). Does not measure whether the injection is automated or repeatable — a one-off manual injection …"
+        quoted: "**PIC-S4-04:** Have all failure modes been fault-injection tested? | Fault-injection test log per FMEA-lite record: for every failure mode with severity ≥ S3, at least one injection test was executed and recovery was ve…"
+        why: "The measured quantity is completeness of the injection apparatus over an enumerated set — 'for every failure mode with severity ≥ S3, at least one injection test was executed'. It cannot pass unless every severe error path can be driven deliberately and its recovery observed, i.e. unless injection seams exist for all of them. That is the…"
+      - id: "PIC-S4-06"
+        source: SECTION6
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "per-task fault-injection seam coverage plus an independent (reset-surviving) test oracle for the watchdog/recovery path only."
+        quoted: "**PIC-S4-06:** Is the watchdog/recovery proof complete? | For every task/thread in the system: hang induced → watchdog reset within 2× configured timeout. Recovery time (reset → operational) measured for every watchdog …"
+        why: "Two testability properties are required for this to pass, both apparatus-level. First, 'for every task/thread in the system: hang induced' — an inducible-hang seam must exist for every task, exhaustively, not just for the ones convenient to stall. Second, 'log from a non-resettable source (external serial logger or second device) confirm…"
+      - id: "PIC-S3-04"
+        source: SECTION6
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "inducible-hang seam per monitored task and externally measurable recovery time, at Stage 3, for the watchdog path only."
+        quoted: "**PIC-S3-04:** Is the watchdog tested and recovery time measured? | Test log: induced hang in each monitored task → watchdog reset within 2× configured timeout. Recovery time (reset → first telemetry message) measured a…"
+        why: "Weaker Stage-3 form of PIC-S4-06, included because 'induced hang in each monitored task' is still a completeness requirement over an enumerated set — every monitored task must have a way to be stalled on demand — and 'recovery time (reset → first telemetry message) measured' requires an externally observable timing oracle. Flagged for th…"
+      - id: "PIC-S5-07"
+        source: SECTION6
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "existence and per-release enforcement of an automated regression suite in CI. Measures no property of suite depth, correctness, or the code under test."
+        quoted: "**PIC-S5-07:** Do all firmware releases pass the regression suite with zero new reliability warnings? | CI log for the release build: full regression suite pass, static analysis zero new warnings vs. baseline, coverage …"
+        why: "Cannot pass without a full automated regression suite that is executed in CI on every release and whose result gates the release, plus a coverage figure that did not decrease. That establishes the existence and enforcement of the automated verification harness itself — the definition's 'supports automated verification' and the Testable→U…"
+    rejected:   # a keyword search matches these; they do not measure it
+      - id: "R-ESP-09"
+        why_not: "The prompt's own example, and it holds. 'Test: flash corrupted OTA image; induce boot; verify bootloader reverts to previous partition' is the CHECK METHOD; the pass condition is 'OTA rollback functional; bootloader reverts to la…"
+      - id: "PIC-S4-05"
+        why_not: "SECTION6 twin of R-ESP-09 and rejected for the same reason. Evidence is 'update succeeded on 10/10 pilot units. Rollback exercised on ≥ 2 units — corrupt image injected'. The injected corrupt image is instrumental; the measured q…"
+      - id: "R-ESP-02"
+        why_not: "Check method is a test ('Test: disconnect WiFi AP; verify sensor task continues producing readings...'), but the pass condition is 'WiFi disconnect → graceful degradation, no crash'. That is Robustness. Unplugging an access point…"
+      - id: "R-ESP-03"
+        why_not: "Same shape as R-ESP-02: 'Test: stop MQTT broker; verify reconnect attempts follow the backoff schedule'. Pass condition 'MQTT reconnect follows ICD backoff; no tight loop' is a Robustness property. Killing a broker requires nothi…"
+      - id: "S-ESP-06"
+        why_not: "The most tempting SECTION5 reject: it contains a genuine negative test ('send invalid config update (out-of-range value); verify rejection with ERROR_SCHEMA_FIELD_RANGE'). But the pass condition is 'Runtime config update with sch…"
+      - id: "S-ESP-05"
+        why_not: "'Test: deploy OTA to 2/10 devices by serial number; verify only targeted devices update' — check method only. Pass condition 'OTA targeting works without per-device firmware builds' measures fleet-scale targeting (Scalable)."
+      - id: "M-ESP-05"
+        why_not: "Matches on 'CI' and 'verify' ('CI: verify build fails with wrong ESP-IDF version'), but what it measures is toolchain pinning — build-environment reproducibility (Maintainable). The Testable link is only the Deterministic→Testabl…"
+      - id: "M-ESP-07"
+        why_not: "Matches on 'CI' ('CI: build log shows zero warnings from project component sources'). A warning-free -Wall -Werror build is static hygiene (Maintainable); it establishes nothing about whether the code's behaviour can be verified.…"
+      - id: "M-ESP-01"
+        why_not: "The strongest structural near-miss and the one I expect the reviewer to argue about. Its check ('one subdirectory per HAL module (hal_sensor/, hal_comm/, hal_time/, hal_storage/); each has CMakeLists.txt + include/') does describ…"
+      - id: "R-ESP-01"
+        why_not: "Same inference trap one layer down. The attribute graph says Robust reinforces Testable because 'explicit status returns and boundary validation create the seams that fault-injection tests exercise', and R-ESP-01 does mandate exa…"
+      - id: "M-ESP-06"
+        why_not: "Logging discipline with per-component TAGs. The Observable→Testable edge says instrumentation supplies the oracles tests assert against, but the pass condition ('Consistent logging with per-component tags; no printf') measures lo…"
+      - id: "R-ESP-07"
+        why_not: "Matches on 'debug builds' and reads like test instrumentation (heap poisoning, HEAP_TASK_TRACKING). It measures a runtime corruption detector (Robustness). The detector fires in the field as readily as under test; it verifies not…"
+      - id: "RL-ESP-06"
+        why_not: "Matches on 'measured' and 'reported in telemetry'. It measures stack-margin adequacy (Reliable) via a runtime measurement — measurement is not verification of behaviour, and telemetry here is an operations channel, not a test ora…"
+      - id: "PIC-S3-10"
+        why_not: "The closest SECTION6 reject. 'The run log must contain evidence of at least one recovery from each expected fault condition ... If a fault did not occur naturally, it must have been injected.' The escape clause is fatal: a 72-hou…"
+      - id: "PIC-S3-01 / PIC-S3-02 / PIC-S4-01 / PIC-S4-02"
+        why_not: "The 72-hour and 720-hour continuous runs read like automated test campaigns ('without human intervention'), but they measure uptime and absence of resets over an interval — the textbook Reliable definition ('probability of correc…"
+      - id: "PIC-S4-03"
+        why_not: "'Is the MTBF target quantified and demonstrated?' — 'demonstrated' is the keyword. Statistical demonstration of a failure-rate target is Reliable; it requires no seams, no oracles, and no repeatable stimulus."
+      - id: "PIC-S4-08"
+        why_not: "'no \"not analyzed\" entries at severity ≥ S3' measures completeness of the FMEA-lite ANALYSIS. It is the input that PIC-S4-04 then requires injection tests against — analysis completeness, not verification completeness."
+      - id: "PIC-S2-03"
+        why_not: "'Is the error-detection strategy defined for every fallible operation?' is the design-phase form of R-ESP-01: it measures that a Robustness strategy is documented. A defined strategy is what makes error paths later injectable, bu…"
+      - id: "PIC-S4-07 / PIC-S3-09"
+        why_not: "'validation complete' / 'documentation complete' match on validation but measure operating-range characterisation coverage across the pilot batch (Reliable / documentation completeness). No behavioural assertion, no harness."
+    gap: "Six things about Testable are measured NOWHERE in this pool, and the first is structural rather than an oversight. 1. ESP32 has no testability criteria at all. All 30 SECTION5 ESP-32 criteria are R/S/M/RL; quality-attributes.yaml records Testable as `criteria_prefix: null` / `criteria_esp32: []`. Every proposal above comes from SECTION3 §4.3 (platform-agnostic core) or SECTION6 (platform-agnostic stage gates). Nothi…"
+
+  Upgradeable:
+    confidence: high
+    summary: "7 proposed (0 full, 7 partial), 8 rejected"
+    proposed:
+      - id: "R-ESP-09"
+        source: SECTION5
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "rollback / anti-bricking on boot failure only. It does not cover atomicity, does not cover authentication, and does not cover rollback triggered by post-boot health failure - an image that boots succ…"
+        quoted: "Criterion: \"OTA rollback: if OTA image fails to boot (watchdog reset within configurable boot count), bootloader reverts to previous working image; `esp_ota_get_boot_partition()` confirms boot partition is the factory o…"
+        why: "The definition names rollback ('recover from a bad update') as one of the three constituent properties of Upgradeability. This criterion does not merely mention OTA - its check method executes the exact scenario the definition describes (bad image lands on the device, device must return to the last-known-good slot) and its pass condition…"
+      - id: "PIC-S4-05"
+        source: SECTION6
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "rollback + device-side image authentication + pilot-batch first-attempt success. Atomicity is absent - nothing here interrupts a write or a download mid-flight. Note also the dangling reference: the …"
+        quoted: "Question: \"**PIC-S4-05:** Is the OTA update path reliability verified?\" | Evidence required: \"OTA test log: update succeeded on 10/10 pilot units. Rollback exercised on ≥ 2 units — corrupt image injected, bootloader rev…"
+        why: "This is the strongest single Upgradeable measure in the whole corpus, and the only place device-side update authentication is required as evidence anywhere. The evidence column demands three separately-verifiable facts: an update actually applied to 10/10 units (deliverability), rollback exercised under corrupt image on ≥ 2 units (rollba…"
+      - id: "RL-ESP-08"
+        source: SECTION5
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "field outcome statistics (success rate, rollback rate) at fleet scale. It measures the result, never the mechanism: it establishes nothing about atomicity, signing, A/B slot layout, or what 'success'…"
+        quoted: "Criterion: \"OTA update reliability: OTA success rate tracked per device and fleet-wide. Target: ≥ 99% OTA success rate on first attempt. Rollback rate tracked; > 5% rollback rate → OTA campaign paused and investigated\" …"
+        why: "This measures the field-observed outcome of the update capability with a numeric bar. If it passes, the deployed fleet demonstrably can be changed in the field and 99% of the time the change sticks on first attempt - that is a direct empirical statement about Upgradeability, not about Reliability that happens to involve an image. The rol…"
+      - id: "PIC-S5-06"
+        source: SECTION6
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "rollout control (staged/canary with health gate) plus the same outcome statistics as RL-ESP-08. It defines no criterion for what the per-stage health gate asserts, and covers no part of atomicity or …"
+        quoted: "Question: \"**PIC-S5-06:** Is the OTA update success rate ≥ 99% and rollback rate ≤ 5%?\" | Evidence required: \"OTA campaign dashboard: per-campaign success rate, rollback rate, devices not yet updated. Any campaign with …"
+        why: "Beyond restating RL-ESP-08's numbers at the PIC gate, this adds a requirement nothing in SECTION5 carries: evidence of a staged rollout with a health gate at each stage. Blast-radius control ('canary → 10% → 100%' with a gate) is a mechanism for safely changing deployed software - it is the operational form of the definition's 'safely'. …"
+      - id: "S-ESP-04"
+        source: SECTION5
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "state preservation across an update (partition isolation). Two limits worth flagging before enforcement: (a) the check is static non-overlap in partitions.csv, not a test that an actual OTA left NVS …"
+        quoted: "Criterion: \"NVS partition is separate from firmware partitions in `partitions.csv`. Factory reset (erase NVS) does not erase firmware; firmware OTA update does not erase NVS\" | Check: \"Check `partitions.csv`: `nvs` part…"
+        why: "An upgrade that wipes the device's identity, credentials and calibration is not a safe field change of software - it is a re-provisioning event requiring a truck roll. This criterion measures the flash-layout property that makes the update non-destructive to device state, and its pass condition ('NVS survives OTA; factory reset does not …"
+      - id: "S-ESP-05"
+        source: SECTION5
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "deliverability and targeting of the update campaign (server-side selection, one binary per hardware revision). Nothing about what happens on the device once the image arrives: no atomicity, no rollba…"
+        quoted: "Criterion: \"OTA update targets a subset of devices by attribute (firmware version, device group, serial number range). OTA image is the same binary for all targeted devices — targeting is server-side, not compiled into …"
+        why: "Its check method is an executed field update ('deploy OTA to 2/10 devices ... verify only targeted devices update'), so a pass establishes that a remote update path exists and applies where intended and only where intended. The single-binary constraint is what makes an update deliverable to a fleet without a per-unit build, i.e. the mech…"
+      - id: "PIC-S5-07"
+        source: SECTION6
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "signed release artifact (build-side half of update authentication). The rest of the criterion - regression suite, static analysis, coverage - measures release-payload quality, which is Testable/Relia…"
+        quoted: "Question: \"**PIC-S5-07:** Do all firmware releases pass the regression suite with zero new reliability warnings?\" | Evidence required: \"CI log for the release build: full regression suite pass, static analysis zero new …"
+        why: "Included for exactly one of its four evidence clauses: 'release signed'. That is the build-side half of the definition's authentication property (the device-side half being PIC-S4-05's 'unsigned/corrupt image rejected at boot'), and it is one of only two places in the corpus where signing is required as evidence rather than described. Fl…"
+    rejected:   # a keyword search matches these; they do not measure it
+      - id: "R-ESP-04"
+        why_not: "Contains the string 'OTA download' and would top any keyword search, but only as a parenthetical example of a long-blocking operation. What it measures is Task Watchdog subscription discipline: every task calls `esp_task_wdt_add(…"
+      - id: "S-ESP-06"
+        why_not: "Matches on 'update' and 'config schema version', and is genuinely adjacent, but the definition scopes Upgradeable to changing deployed *software* (firmware OTA / package updates). A downlink config value change is not a software …"
+      - id: "S-ESP-01"
+        why_not: "Matches a search for identity/authentication. It measures that device identity is hardware-derived or NVS-provisioned rather than compiled in - a Scalable/Secure property. Update authentication is a different chain entirely: know…"
+      - id: "S-ESP-03"
+        why_not: "Matches on 'TLS certificate' and 'provisioned'. The certificate here secures the MQTT telemetry link and gives client IDs fleet uniqueness. Nothing in the criterion or its check touches the image signing key, secure boot, or the …"
+      - id: "M-ESP-05"
+        why_not: "Matches on 'version' and 'version check fails the build'. It measures build-environment reproducibility (correct ESP-IDF at compile time), which is a Maintainable property. It has no bearing on a device already in the field: an i…"
+      - id: "M-ESP-04"
+        why_not: "Would match a search for sdkconfig, the file that holds `CONFIG_BOOTLOADER_OTA_ROLLBACK_MAX_COUNT` and the secure-boot switches. But the criterion measures git-history hygiene - that sdkconfig changes are committed with a descrip…"
+      - id: "RL-ESP-03"
+        why_not: "Matches on 'partition', 'flash', 'erase cycles', 'lifetime'. It measures NVS write-endurance budgeting (Reliable). It is explicitly about the nvs partition, not the ota_0/ota_1 slots, and says nothing about repeated OTA writes co…"
+      - id: "SECTION3 §4.3 Coverage Bar"
+        why_not: "The temptation is structural: quality-attributes.yaml records 'Testable enables Upgradeable - CI test gates make OTA releases trustworthy', which invites mapping the coverage bar here. It does not measure Upgradeable. Its own fir…"
+    gap: "Start with the structural finding: quality-attributes.yaml declares Upgradeable `criteria_prefix: null` and `criteria_esp32: []` - the vocabulary asserts nothing measures it. That is wrong but nearly right. Real coverage exists, smuggled inside criteria filed under Robust (R-ESP-09), Scalable (S-ESP-04, S-ESP-05) and Reliable (RL-ESP-08), plus three SECTION6 PIC items. Nobody can find it by prefix, and no stage gate…"
+
+  Secure:
+    confidence: high
+    summary: "4 proposed (0 full, 4 partial), 12 rejected"
+    proposed:
+      - id: "S-ESP-02"
+        source: SECTION5
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "no hardcoded secrets (WiFi credentials only) — confidentiality at rest is not covered"
+        quoted: "WiFi credentials (SSID, password) are stored in NVS, not hardcoded. Provisioning mechanism exists: either (a) ESP-IDF unified provisioning (`wifi_prov_mgr`) via BLE/SoftAP, (b) serial command during factory test, or (c)…"
+        why: "The Secure definition names \"never hardcoding secrets\" as a central field-IoT requirement, and a WiFi PSK is a secret in the literal sense. The pass condition is a security property, not a proxy for one: if it holds, `strings firmware.bin` does not yield the network credential and one recovered unit does not compromise every unit on the …"
+      - id: "S-ESP-03"
+        source: SECTION5
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "no hardcoded credential/certificate material + per-device client-ID uniqueness — conditional on TLS being used, which nothing requires"
+        quoted: "MQTT broker URI, client ID, and TLS certificate (if applicable) are NVS-stored or provisioned; not compiled into the binary. Client ID must include the device MAC or serial to guarantee uniqueness per unit | Code review…"
+        why: "Two genuine security facets, both partial. First, if a TLS certificate exists it must not be in the binary — same no-hardcoded-key-material property as S-ESP-02, and the pass condition tests it directly. Second, per-device client-ID uniqueness is a precondition for per-device credentialing and for a broker ACL that can distinguish units;…"
+      - id: "PIC-S4-05"
+        source: SECTION6
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "firmware image integrity / authenticated update at Stage 4 only — not confidentiality, authenticity of the device, or command authentication"
+        quoted: "**PIC-S4-05:** Is the OTA update path reliability verified? | OTA test log: update succeeded on 10/10 pilot units. Rollback exercised on ≥ 2 units — corrupt image injected, bootloader reverts to previous image within co…"
+        why: "One clause of the evidence bar — \"Unsigned/corrupt image rejected at boot\" — is the only place in any of these three sections where a device is required to demonstrate that it refuses firmware it cannot authenticate. That is the integrity facet exactly as the definition states it (\"signatures, secure boot, authenticated updates\"): satisf…"
+      - id: "S-ESP-01"
+        source: SECTION5
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "per-device identity provenance (non-cryptographic, unauthenticated) — not authenticity"
+        quoted: "Device identity is derived from ESP32 MAC address (base MAC, `esp_efuse_mac_get_default()`) or a provisioned unique ID stored in NVS. MAC is not hardcoded and not compiled into the binary | Code review: `app_main.c` rea…"
+        why: "Weakest of the four — propose only if the reviewer wants the authenticity substrate represented at all. The definition lists \"per-device identity\" under authenticity, and this criterion makes per-device identity a checkable property rather than an aspiration: passing it establishes that no two units ship with the same compiled-in identif…"
+    rejected:   # a keyword search matches these; they do not measure it
+      - id: "R-ESP-09"
+        why_not: "This is the case named in the task brief. \"OTA rollback: if OTA image fails to boot (watchdog reset within configurable boot count), bootloader reverts to previous working image\" — the check flashes a *corrupted* image and verifi…"
+      - id: "S-ESP-06"
+        why_not: "The likeliest false positive in the set, because it contains the words 'downlink command' and 'validated ... before application'. Schema validation is not authentication. The test sends an out-of-range value and expects `ERROR_SC…"
+      - id: "S-ESP-04"
+        why_not: "\"NVS partition is separate from firmware partitions in `partitions.csv`\" is a data-durability and partition-layout property: NVS survives OTA, factory reset does not brick. NVS is where S-ESP-02/03 put the secrets, so the word is…"
+      - id: "S-ESP-05"
+        why_not: "Matches on 'OTA'. \"OTA update targets a subset of devices by attribute ... targeting is server-side, not compiled into the image\" measures Scalability — that one binary serves the fleet and no per-device build is needed. The test…"
+      - id: "RL-ESP-08"
+        why_not: "Matches on 'OTA'. Success rate ≥ 99% and rollback rate > 5% → pause is a fleet reliability metric. A fleet accepting unsigned images from anyone would post an excellent OTA success rate."
+      - id: "PIC-S5-06"
+        why_not: "\"Is the OTA update success rate ≥ 99% and rollback rate ≤ 5%?\" — the SECTION6 governance restatement of RL-ESP-08. Same reasoning: a rate, not a control. Note the contrast with PIC-S4-05, whose evidence column does carry a real s…"
+      - id: "PIC-S5-03"
+        why_not: "\"Are all S1 and fleet-affecting S2 incidents postmortemed?\" — S1 is defined in SECTION6 §... as \"Critical: system non-functional, safety hazard, data loss, security breach\", so this is where the word 'security' literally appears …"
+      - id: "SECTION3 §4.3 Production-Ready row"
+        why_not: "\"All CRC failure paths, schema version mismatch paths, and buffer-overflow paths exercised\" is the closest §4.3 comes, and it is still not a security measure. Exercising a buffer-overflow *path* means the existing overflow-handli…"
+      - id: "M-ESP-06"
+        why_not: "Matches on 'log'. Per-component `static const char *TAG` and no `printf()` is a logging-consistency (Maintainable) criterion. Named here because the quality-attributes graph records an explicit Secure↔Observable conflict — \"logs …"
+      - id: "M-ESP-04"
+        why_not: "\"`sdkconfig` is committed to the repository and treated as a source file\" — sdkconfig is exactly where `CONFIG_SECURE_BOOT_V2_ENABLED` and `CONFIG_SECURE_FLASH_ENC_ENABLED` would be set, so it is the file that would carry the mis…"
+      - id: "R-ESP-01"
+        why_not: "Return-value checking against `ESP_OK` is Robustness at internal API boundaries. Secure's definition does say input validation is shared with robustness under *reinforces*, but reinforces is a relationship, not the definition — a…"
+      - id: "SECTION5 checklist M-15"
+        why_not: "\"Code reviewed by second engineer (Stage 3+); PIC for safety/security (Stage 4+)\" is the only checklist line pairing 'PIC' with 'security'. It routes security-relevant code to a reviewer; it defines no bar that review applies, no…"
+    gap: "Secure is the largest unmeasured attribute in this set, and that is structural rather than accidental: quality-attributes.yaml already records `criteria_prefix: null` and `criteria_esp32: []` for it. All four proposals above are borrowed — three are Scalable criteria whose no-hardcoded-values rule happens to catch secrets, and one is a single clause buried in a Reliable-framed PIC evidence column. Nothing in SECTION…"
+
+  Resource Efficient:
+    confidence: high
+    summary: "10 proposed (0 full, 10 partial), 15 rejected"
+    proposed:
+      - id: "RL-ESP-02"
+        source: SECTION5
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "RAM — boundedness/static allocation discipline. Establishes RAM demand is bounded and knowable; says nothing about how large that bound is, nor about CPU, flash, energy, or bandwidth."
+        quoted: "No unbounded `malloc`/`calloc` in task loops or ISR paths. All long-lived allocations are made at init. Temporary allocations in task loops must be bounded in size and frequency, or use `alloca()` (stack-allocated, auto…"
+        why: "The attribute definition names \"static memory budgeting\" as the dominant MCU concern, and the yaml's one synergy edge (Resource Efficient reinforces Deterministic) is explicitly \"static allocation and the absence of garbage collection\". This criterion is that edge made checkable: passing establishes that total RAM demand is fixed at init…"
+      - id: "RL-ESP-06"
+        source: SECTION5
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "RAM — per-task stack, measured peak plus a minimum margin. One-sided (no upper bound on over-allocation); does not cover heap, static .bss/.data, DMA buffers, or any non-RAM resource."
+        quoted: "FreeRTOS task stack high-water-mark: every task's stack is measured via `uxTaskGetStackHighWaterMark()`; reported in telemetry; adjusted to ≥ 125% of measured peak. ESP-IDF unit note: `xTaskCreate()` / `xTaskCreatePinne…"
+        why: "Passing requires that per-task RAM allocation be derived from a measured peak rather than guessed, and that the allocated-vs-used ratio be a stated number. That is exactly the \"meet requirements with margin to spare\" half of the definition, applied to the largest fixed RAM consumer on an ESP32 node. Caveat the engineer must see: the bar …"
+      - id: "RL-ESP-03"
+        source: SECTION5
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "Flash/storage — write-endurance consumption of the NVS partition. Does not cover flash *capacity* (image size vs. partition size), and the pass condition is documentation-shaped (a category and a cal…"
+        quoted: "NVS wear: every NVS write (config update, calibration save, state persistence) must state the expected write frequency and the calculated NVS partition lifetime. ESP32 NVS uses wear-leveling across the partition; with 0…"
+        why: "Flash/storage is named in the definition as one of the five scarce resources. This criterion quantifies consumption of a finite flash budget (erase cycles) per write path against a stated capacity, and its remedy — rate-limit the write or move it — is a consumption-reduction action, not a fault-handling action. That distinguishes it from…"
+      - id: "PIC-S4-10"
+        source: SECTION6
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "Memory and handle-class resources only (stack, heap, queue depth, FD, thread count). CPU cycles, flash capacity, energy, and network bandwidth are absent from the enumerated list, and the margins are…"
+        quoted: "PIC-S4-10: Are all resource budgets (stack, heap, queue depth, FD count, thread count) documented with measured peaks and margins? — evidence: \"Resource budget table: for every resource type (stack per task, heap, queue…"
+        why: "This is the single most direct instrument for the attribute anywhere in the three sections: it demands measured peak, configured maximum, and a quantified margin for every memory-class resource, with numeric bars. \"Economical use ... with margin to spare\" is literally what the evidence table records. It is gate-blocking at Stage 4, so it…"
+      - id: "PIC-S5-04"
+        source: SECTION6
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "RAM/handle headroom ceiling (80% of budget) in the field. Covers only the same memory-class resources as PIC-S4-10, and only for devices already deployed at Stage 5 — nothing equivalent gates a desig…"
+        quoted: "PIC-S5-04: Are resource trends (stack, heap, RSS, FD count) stable across the fleet? — evidence: \"Fleet-wide resource trending: per-device heap watermark, stack high-water-mark, RSS, FD count over trailing 90 days. Any …"
+        why: "The leak-trend half of this is Reliable, not Resource Efficient — but the second clause, \"Any device exceeding 80% of its resource budget → alert\", is the ONLY ceiling on resource consumption in any of the three sections. Every other criterion sets a floor (≥ 25% margin) that over-allocation satisfies; this one fails a device for consumi…"
+      - id: "PIC-S3-07"
+        source: SECTION6
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "Average electrical power at the rails, bench-measured at one stage gate. Measures agreement between calculation and measurement, NOT economy: a design whose calculated budget is extravagant passes as…"
+        quoted: "PIC-S3-07: Are power budget measurements within ±10% of calculated values? — evidence: \"Power measurement log: voltage and current at each rail, measured on ≥ 3 units, at min and max input voltage. All measured values w…"
+        why: "The only criterion in any of the three sections whose pass condition is a number about energy. It establishes that a power budget was calculated up front and that the built hardware draws what the budget claimed, within ±10%, on ≥ 3 units. Energy is named in the definition as a scarce resource and, for a field node, as the binding constr…"
+      - id: "PIC-S3-09"
+        source: SECTION6
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "Energy — per-state current (including sleep µA) is measured and recorded. No threshold, no duty-cycle weighting, no derived service life; it produces the input to an energy budget without checking it…"
+        quoted: "PIC-S3-09: Is the operating-range documentation complete per §4 of this section? — evidence: \"Operating-range record (§4.1 template) for each platform, with all fields populated.\" The §4.2 Electrical Operating Range tem…"
+        why: "Included only because \"all fields populated\" pulls in the per-state current row, which is the one place sleep-mode current (µA) is measured at all. Passing establishes that active/idle/sleep draw are measured numbers on ≥ 3 units rather than datasheet assertions — a real, if minimal, energy measurement. Weakest of the proposals: PIC-S3-0…"
+      - id: "PIC-S3-12"
+        source: SECTION6
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "Flash/storage write-endurance budget, computed from *estimated* write frequency at Stage 3. Does not touch flash capacity, and the estimate is unvalidated until PIC-S4-09."
+        quoted: "PIC-S3-12: Is the flash/storage endurance calculation documented? — evidence: \"Endurance calculation for every write path: expected write frequency × bytes per write × product lifetime → total bytes written vs. flash/de…"
+        why: "A quantified consumption-vs-capacity calculation for a finite resource with a hard numeric bar (≥ 5 years), covering every write path and not just NVS. Unlike most PIC rows, failing it forces a design change (wear-leveling or a different part), i.e. it can reject a design for spending too much of a resource."
+      - id: "PIC-S4-09"
+        source: SECTION6
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "Flash/storage write-endurance, measured. Silent on flash capacity, RAM, CPU, energy, bandwidth."
+        quoted: "PIC-S4-09: Is the flash/storage endurance calculation validated with measured write frequency? — evidence: \"Measured write frequency from 720-hour run (not estimated from design) vs. flash/storage endurance rating. Reca…"
+        why: "Converts PIC-S3-12's estimate into a measured consumption rate over 720 hours and re-tests it against the same ≥ 5-year bar. This is the only place in the three sections where actual consumption of a scarce resource is measured over time and checked against a capacity limit — the canonical shape of a resource-efficiency measurement."
+      - id: "PIC-S5-09"
+        source: SECTION6
+        approved: null          # <- set true or false
+        measures_fully: false
+        facet: "Flash/storage write rate in the field. Conditional on telemetry existing; no other resource is re-budgeted after deployment except via PIC-S5-04."
+        quoted: "PIC-S5-09: Are storage endurance predictions updated with actual field write rates? — evidence: \"If field write rate telemetry is available: compare actual write frequency to the design estimate from Stage 4. Recalculat…"
+        why: "Extends the flash-consumption budget into the field and names a consumption-reduction remedy (\"implement write-rate limiting via config update\"). Genuinely measures the flash facet in service. Weakened by its own conditional: \"If field write rate telemetry is available\" — with no telemetry, the row passes vacuously."
+    rejected:   # a keyword search matches these; they do not measure it
+      - id: "R-ESP-08"
+        why_not: "Titled \"SPIFFS / LittleFS wear\" — the strongest keyword bait in the set. What it actually measures is that filesystem calls have return-value checks and that failures are logged and retried into a bounded queue; pass is \"Filesyst…"
+      - id: "RL-ESP-01"
+        why_not: "Reads as a RAM criterion (heap, `largest_free_block`, 32 KB / 8 KB thresholds) but measures fault detection of heap degradation and a recovery action: pass is \"Heap fragmentation monitored; warning + restart on critical\". A firmw…"
+      - id: "RL-ESP-05"
+        why_not: "Contains \"WiFi TX at max power (20.5 dBm)\" and \"thermal budget\" — power and budget in one row. The quantity actually bounded is junction temperature with ≥ 10°C margin; TX power enters as a heat source, not as an energy expenditu…"
+      - id: "RL-ESP-04"
+        why_not: "\"Link budget\" and \"margin ≥ 6 dB\" match on budget/margin vocabulary. The resource being budgeted is RF path loss against receiver sensitivity — an operating-envelope property, not a consumable. It establishes Reliable RF operatio…"
+      - id: "R-ESP-05"
+        why_not: "\"BLE scan duty cycle\" is the closest any ESP32 criterion comes to radio-on-time, and duty cycle is the standard lever for radio energy. But the bar it is held to is WiFi throughput: \"scan window does not exceed the value validate…"
+      - id: "R-ESP-02"
+        why_not: "Requires a bounded TX queue (\"queue fills to configured depth, oldest messages dropped with counter increment\"), which does cap RAM. But the measured outcome is \"WiFi disconnect → graceful degradation, no crash\" — Robustness. No …"
+      - id: "R-ESP-09"
+        why_not: "Exactly the case in the brief: an OTA-image criterion. A/B partitioning is the yaml's named conflict with Resource Efficient (\"A/B partitioning roughly doubles flash; OTA buffers consume RAM\"), so the OTA image is resource-releva…"
+      - id: "R-ESP-07"
+        why_not: "`CONFIG_HEAP_POISONING_COMPREHENSIVE=y` matches on \"heap\". It measures corruption detection, and the setting itself *spends* RAM and cycles on canary bytes — it pushes against the attribute rather than measuring it. Enabling it c…"
+      - id: "S-ESP-04"
+        why_not: "`partitions.csv`, NVS at a fixed offset, non-overlapping with `factory`/`ota_0`/`ota_1` — flash-partition vocabulary throughout. What it establishes is that NVS survives OTA and factory reset does not brick the device. Not one cl…"
+      - id: "M-ESP-02"
+        why_not: "Kconfig row that literally lists \"buffer sizes\" among build-time parameters. It measures where a parameter lives (Kconfig for build-time, NVS for runtime), i.e. configuration hygiene — Maintainable. It places no constraint on any…"
+      - id: "M-ESP-06"
+        why_not: "`CONFIG_LOG_MAXIMUM_LEVEL` is the ESP-IDF knob that compiles log strings out of the image, which is a real flash lever — but the criterion measures TAG consistency and the absence of `printf()`, pass \"Consistent logging with per-…"
+      - id: "PIC-S2-05"
+        why_not: "\"Is the stack sizing strategy documented?\" looks like the design-stage RAM budget. Its evidence requires unit correctness (bytes vs. words, the 4× trap) and a documented strategy — then explicitly permits the opposite of a budget…"
+      - id: "PIC-S3-06"
+        why_not: "\"Is the heap stable over the 72-hour run?\" — resource vocabulary, leak-detection semantics (SECTION 6 §5 defines the bar as a regression slope on free heap, p < 0.05). Absence of drift is Reliable. A firmware sitting at 95% heap …"
+      - id: "PIC-S4-02"
+        why_not: "Contains \"No resource creep\" and trends heap, stack, FD, thread count over 720 hours. Same shape as PIC-S3-06: it measures stability of consumption, not its level or its margin. The 720-hour run is the *source* of the measured pe…"
+      - id: "SECTION3 §4.3 Coverage Bar"
+        why_not: "The only SECTION 3 item in scope. Line-coverage percentages (≥ 60% / ≥ 80% on the agnostic core) measure Testable. Per the yaml, test scaffolding is a declared conflict with Resource Efficient (\"test hooks, assertion code, and in…"
+    gap: "Start with the structural fact, because it governs everything below: quality-attributes.yaml gives Resource Efficient `criteria_prefix: null` and `criteria_esp32: []`. SECTION 5 defines measurable criteria for the four RSMR attributes and for no others, so ZERO of the 30 ESP32 criteria were written to measure this attribute. Every SECTION 5 proposal above is borrowed from Reliable's RL-* set and was authored to prov…"
+

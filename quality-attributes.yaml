@@ -1,0 +1,372 @@
+# Quality attribute vocabulary and relationship graph.
+#
+# EXTRACTED MECHANICALLY from the reference below - not paraphrased.
+# A graph an LLM restated is a graph that drifts from its source with
+# nobody noticing. Regenerate with tools/extract_attrs.py rather than
+# editing by hand; `source_sha256` makes a stale copy detectable.
+#
+# WHAT THIS IS FOR
+# SECTION1's stage bar is expressed in RSMR - four of the twelve
+# attributes here. SECTION5 supplies measurable criteria for those four
+# and for no others. SECTION2's requirements table binds to neither.
+# This file is the vocabulary that lets a requirement name what quality
+# it is buying, and the conflict graph that shows what it costs.
+
+source: workflow-iot/Embedded IoT Engineering Quality Attributes Cross-Platform Reference.md
+source_sha256: 936492aa7b02002798760845db78b20aab1faccbf2d6aaa968803dcede58de28
+criteria_source: workflow-iot/WORKFLOW_SECTION5.md
+criteria_source_sha256: 79619c2a50410e17ee1f0499880277a2ff9121b2a444183f5a209a710017f9d3
+
+# The four SECTION1 stage-bar attributes. The other eight have no
+# measurable criteria anywhere, which is itself a finding: a requirement
+# claiming one of them is UNVERIFIABLE by construction.
+rsmr: [Robust, Scalable, Maintainable, Reliable]
+
+attributes:
+  - name: Robust
+    number: 1
+    definition: "Robustness is the property of continuing correct or safely-degraded operation in the presence of invalid input, peripheral faults, transient communication loss, and out-of-contract states — without crash, lock-up, or undefined behavior. In embedded terms: every external stimulus (sensor reading, register state, network packet, operator command) is treated as untrusted until validated, and every fallible operation has a defined failure branch."
+    in_rsmr: true
+    criteria_prefix: R
+    criteria_esp32: [R-ESP-01, R-ESP-02, R-ESP-03, R-ESP-04, R-ESP-05, R-ESP-06, R-ESP-07, R-ESP-08, R-ESP-09]
+    conflicts_with:
+      - target: Deterministic
+        why: "defensive branches, retries, and backoff add data-dependent execution paths, widening worst-case execution time (WCET) and timing jitter."
+      - target: Resource Efficient
+        why: "every guard, range check, and watchdog refresh costs flash, RAM (retry state), and cycles."
+    reinforces:
+      - target: Reliable
+        why: "robustness is the precondition both build on — Reliable depends on it to survive faults over time; Safety depends on it to reach a defined safe state instead of undefined behavior."
+      - target: Safety
+        why: "robustness is the precondition both build on — Reliable depends on it to survive faults over time; Safety depends on it to reach a defined safe state instead of undefined behavior."
+      - target: Maintainable
+        why: "explicit status returns and boundary validation create the seams that fault-injection tests exercise, that logs report, and that double as the security input-validation layer."
+      - target: Testable
+        why: "explicit status returns and boundary validation create the seams that fault-injection tests exercise, that logs report, and that double as the security input-validation layer."
+      - target: Observable
+        why: "explicit status returns and boundary validation create the seams that fault-injection tests exercise, that logs report, and that double as the security input-validation layer."
+      - target: Secure
+        why: "explicit status returns and boundary validation create the seams that fault-injection tests exercise, that logs report, and that double as the security input-validation layer."
+
+  - name: Scalable
+    number: 2
+    definition: "Scalability is the capacity to absorb growth — more sensors/channels per node, more nodes per fleet, more messages per second, more features per firmware — without architectural rework. On an MCU this means \"fixed-size structures dimensioned for the maximum, indexed by table\"; at the fleet level it means provisioning, addressing, and update mechanisms that work for 10 or 10,000 nodes."
+    in_rsmr: true
+    criteria_prefix: S
+    criteria_esp32: [S-ESP-01, S-ESP-02, S-ESP-03, S-ESP-04, S-ESP-05, S-ESP-06]
+    conflicts_with:
+      - target: Deterministic
+        why: "shared queues, contention, and fan-in introduce queuing latency and jitter that erode bounded-time guarantees."
+      - target: Reliable
+        why: "fan-out multiplies independent failure modes; per-node reliability must rise to hold fleet-level reliability constant."
+      - target: Resource Efficient
+        why: "dimensioning every structure for the maximum SKU consumes RAM/flash on smaller variants."
+    depends_on:
+      - target: Maintainable
+        why: "table-driven, modular design is what lets features and channels grow without rework; tangled code caps scale."
+      - target: Observable
+        why: "you cannot operate a fleet you cannot see (telemetry), cannot patch (OTA), or cannot trust (per-device identity/provisioning)."
+      - target: Upgradeable
+        why: "you cannot operate a fleet you cannot see (telemetry), cannot patch (OTA), or cannot trust (per-device identity/provisioning)."
+      - target: Secure
+        why: "you cannot operate a fleet you cannot see (telemetry), cannot patch (OTA), or cannot trust (per-device identity/provisioning)."
+    reinforces:
+      - target: Portable
+        why: "abstractions that enable scale across heterogeneous hardware also aid porting."
+
+  - name: Maintainable
+    number: 3
+    definition: "Maintainability is the ease with which a system can be understood, corrected, adapted, and extended by an engineer who did not write it (or by the original author 18 months later). Concretely: separation of configuration from logic, layered driver abstraction, consistent naming and status conventions, comments that explain _why_, and pure functions isolated from I/O."
+    in_rsmr: true
+    criteria_prefix: M
+    criteria_esp32: [M-ESP-01, M-ESP-02, M-ESP-03, M-ESP-04, M-ESP-05, M-ESP-06, M-ESP-07]
+    depended_on_by:
+      - target: Scalable
+        why: "feature/channel growth rides on maintainable structure."
+    conflicts_with:
+      - target: Deterministic
+        why: "abstraction layers and indirection add call overhead and can hide timing behind interfaces, complicating WCET reasoning."
+      - target: Resource Efficient
+        why: "readability and layering cost code size and cycles versus hand-inlined register pokes."
+    reinforces:
+      - target: Testable
+        why: "modular, I/O-isolated code with pure functions is directly unit-testable; the same seams serve both."
+      - target: Portable
+        why: "the HAL abstraction aids porting; clean module boundaries make updates surgical; readable code yields fewer defects; config/secret separation keeps credentials out of logic and eases patching; isolated safety logic is auditable."
+      - target: Upgradeable
+        why: "the HAL abstraction aids porting; clean module boundaries make updates surgical; readable code yields fewer defects; config/secret separation keeps credentials out of logic and eases patching; isolated safety logic is auditable."
+      - target: Reliable
+        why: "the HAL abstraction aids porting; clean module boundaries make updates surgical; readable code yields fewer defects; config/secret separation keeps credentials out of logic and eases patching; isolated safety logic is auditable."
+      - target: Secure
+        why: "the HAL abstraction aids porting; clean module boundaries make updates surgical; readable code yields fewer defects; config/secret separation keeps credentials out of logic and eases patching; isolated safety logic is auditable."
+      - target: Safety
+        why: "the HAL abstraction aids porting; clean module boundaries make updates surgical; readable code yields fewer defects; config/secret separation keeps credentials out of logic and eases patching; isolated safety logic is auditable."
+      - target: Observable
+        why: "structured code naturally exposes well-defined state to log."
+
+  - name: Reliable
+    number: 4
+    definition: "Reliability is the probability of correct, uninterrupted operation over a defined interval under stated conditions — the time-integral of robustness plus recovery. It encompasses fault detection, automatic recovery, data integrity (CRC/checksums), state persistence across resets, and graceful degradation. Where robustness handles _an_ event, reliability handles _every_ event over months of uptime."
+    in_rsmr: true
+    criteria_prefix: RL
+    criteria_esp32: [RL-ESP-01, RL-ESP-02, RL-ESP-03, RL-ESP-04, RL-ESP-05, RL-ESP-06, RL-ESP-07, RL-ESP-08]
+    depended_on_by:
+      - target: Upgradeable
+        why: "safe OTA requires reliable rollback/anti-bricking — yet each update is itself a reliability-risk window (see CONFLICT note in the matrix)."
+    conflicts_with:
+      - target: Scalable
+        why: "fleet fan-out multiplies failure modes."
+      - target: Resource Efficient
+        why: "redundancy, watchdog margins, retry buffers, and CRC all cost cycles, RAM, and energy."
+    depends_on:
+      - target: Robust
+        why: "reliability is robustness sustained and recovered over time; it cannot exceed the robustness of its weakest fault path."
+      - target: Deterministic
+        why: "a control loop is only reliable if its timing is bounded; missed deadlines are reliability failures."
+      - target: Observable
+        why: "you cannot recover from faults you cannot detect, nor trust recovery paths you cannot verify."
+      - target: Testable
+        why: "you cannot recover from faults you cannot detect, nor trust recovery paths you cannot verify."
+    reinforces:
+      - target: Safety
+        why: "a reliable system reaches its safe state more consistently — though Safety must still hold even when reliability is exhausted (fail-safe ≠ fail-functional)."
+      - target: Secure
+        why: "integrity checks (CRC, signatures) serve both; secure boot underpins reliable boot."
+
+  - name: Safety
+    number: 5
+    definition: "Safety (functional safety) is the property that the system does not cause harm to people, equipment, or the environment, even under fault. It is built on **defined safe states**, **bounded reaction times** to hazardous conditions, **independent monitoring** of actuators, and **fail-safe defaults** (the system de-energizes to a safe condition on any loss of control). Safety is distinct from reliability: a safe system may stop functioning, but it must never do something dangerous."
+    in_rsmr: false
+    criteria_prefix: null   # no measurable criteria exist
+    criteria_esp32: []
+    conflicts_with:
+      - target: Portable
+        why: "certified/validated safe behavior is platform- and hardware-specific; abstraction layers that aid portability can undermine the exact timing/behavior a safety case depends on."
+      - target: Upgradeable
+        why: "field-updating safety-critical logic is hazardous and typically demands re-validation, signed/locked update of safety partitions, and sometimes excluding safety logic from OTA entirely."
+      - target: Resource Efficient
+        why: "independent monitoring, redundancy, and short safety deadlines cost cycles, an extra task/core, and energy."
+    depends_on:
+      - target: Deterministic
+        why: "a safe state is only safe if reached within a bounded reaction time; without timing guarantees, \"fail-safe\" is unproven."
+      - target: Robust
+        why: "safety builds on defined behavior under fault (Robust) and must be verified exhaustively, including fault injection (Testable)."
+      - target: Testable
+        why: "safety builds on defined behavior under fault (Robust) and must be verified exhaustively, including fault injection (Testable)."
+    reinforces:
+      - target: Reliable
+        why: "fail-safe defaults aid reliable recovery; security prevents malicious commands from driving unsafe actuation (an authentication bypass is a safety hazard)."
+      - target: Secure
+        why: "fail-safe defaults aid reliable recovery; security prevents malicious commands from driving unsafe actuation (an authentication bypass is a safety hazard)."
+
+  - name: Deterministic
+    number: 6
+    definition: "Determinism is the guarantee that an operation completes within a bounded, predictable time (and produces the same result for the same inputs), independent of unrelated system activity. It requires bounded worst-case execution time (WCET), fixed task priorities, no unbounded waits, no dynamic allocation in hot paths, and avoidance of priority inversion. Hard-real-time systems must _never_ miss a deadline; soft-real-time systems tolerate rare misses."
+    in_rsmr: false
+    criteria_prefix: null   # no measurable criteria exist
+    criteria_esp32: []
+    conflicts_with:
+      - target: Robust
+        why: "defensive branches and retries widen WCET and add data-dependent paths."
+      - target: Scalable
+        why: "shared queues and contention introduce queuing jitter."
+      - target: Maintainable
+        why: "abstraction layers and indirection add overhead and obscure timing."
+      - target: Portable
+        why: "abstraction layers and indirection add overhead and obscure timing."
+      - target: Observable
+        why: "logging/tracing inject I/O latency and jitter into timed paths."
+      - target: Secure
+        why: "cryptographic operations have data-dependent, often variable, execution time (mitigated only with constant-time implementations)."
+      - target: Upgradeable
+        why: "bootloader integrity checks, larger images, and dynamic update machinery add timing variance and flash-access latency."
+    reinforces:
+      - target: Resource Efficient
+        why: "static allocation, no garbage collection, and fixed-size structures serve both determinism and leanness — the one major synergy of determinism."
+      - target: Testable
+        why: "deterministic behavior is repeatable, so tests are stable rather than flaky."
+    enables:
+      - target: Reliable
+        why: "bounded timing is a precondition for reliable control loops and for provably-timely safe-state reactions."
+      - target: Safety
+        why: "bounded timing is a precondition for reliable control loops and for provably-timely safe-state reactions."
+
+  - name: Portable
+    number: 7
+    definition: "Portability is the ability to move code across hardware variants, MCU families, or operating environments with minimal change — achieved by isolating hardware- and OS-specific dependencies behind a stable interface (a hardware abstraction layer / port layer) and depending on standards (CMSIS, POSIX, the FreeRTOS API) rather than vendor specifics. Portability is layered: application logic should be fully portable; only a thin port layer is hardware-bound."
+    in_rsmr: false
+    criteria_prefix: null   # no measurable criteria exist
+    criteria_esp32: []
+    conflicts_with:
+      - target: Resource Efficient
+        why: "every abstraction layer costs an indirection, code size, and sometimes RAM versus inlined register access."
+      - target: Deterministic
+        why: "indirection and generic interfaces add call overhead and obscure platform-specific timing."
+      - target: Safety
+        why: "validated safe behavior is hardware-specific; abstraction can break the exact timing/behavior a safety case relies on."
+      - target: Secure
+        why: "the strongest security is hardware-backed (secure element, eFuse, RDP) and therefore non-portable; a portable crypto layer may bypass hardware roots of trust."
+    reinforces:
+      - target: Maintainable
+        why: "the same abstraction that enables porting localizes change (maintainability) and permits host-based unit testing (testability) by stubbing the port layer."
+      - target: Testable
+        why: "the same abstraction that enables porting localizes change (maintainability) and permits host-based unit testing (testability) by stubbing the port layer."
+      - target: Scalable
+        why: "a clean port layer eases deploying across heterogeneous fleet hardware, swapping logging backends, and adapting update mechanisms per variant."
+      - target: Observable
+        why: "a clean port layer eases deploying across heterogeneous fleet hardware, swapping logging backends, and adapting update mechanisms per variant."
+      - target: Upgradeable
+        why: "a clean port layer eases deploying across heterogeneous fleet hardware, swapping logging backends, and adapting update mechanisms per variant."
+
+  - name: Observable
+    number: 8
+    definition: "Observability is the degree to which internal state can be inferred from external outputs — structured logging, metrics/counters, tracing, and health telemetry — sufficient to diagnose a fault _after the fact_ without reproducing it. It differs from debugging (live, interactive): observability is designed-in instrumentation that works on a node you cannot physically reach."
+    in_rsmr: false
+    criteria_prefix: null   # no measurable criteria exist
+    criteria_esp32: []
+    conflicts_with:
+      - target: Deterministic
+        why: "logging and trace I/O inject latency and jitter into timed paths."
+      - target: Resource Efficient
+        why: "ring buffers, log strings, core-dump regions, and uplink bandwidth/power all cost resources."
+      - target: Secure
+        why: "logs can leak secrets/PII, and the telemetry channel is an additional attack and exfiltration surface; log redaction and channel authentication are required."
+    reinforces:
+      - target: Maintainable
+        why: "instrumentation exposes the state that diagnosis and test oracles need; assertions and counters double as test checkpoints."
+      - target: Testable
+        why: "instrumentation exposes the state that diagnosis and test oracles need; assertions and counters double as test checkpoints."
+      - target: Upgradeable
+        why: "telemetry confirms successful rollout and gates rollback; a portable logging interface swaps backends per platform."
+      - target: Portable
+        why: "telemetry confirms successful rollout and gates rollback; a portable logging interface swaps backends per platform."
+    enables:
+      - target: Reliable
+        why: "fault detection (a reliability prerequisite) and fleet operation (a scalability prerequisite) both depend on observability."
+      - target: Scalable
+        why: "fault detection (a reliability prerequisite) and fleet operation (a scalability prerequisite) both depend on observability."
+
+  - name: Testable
+    number: 9
+    definition: "Testability is the degree to which a system supports automated verification of its behavior — unit tests of pure logic, integration tests of subsystems, hardware-in-the-loop (HIL) tests of the full node, and fault-injection tests of error paths. It depends on isolating logic from I/O (so logic runs on a host), providing seams for mocking, and making behavior deterministic and observable enough to assert on."
+    in_rsmr: false
+    criteria_prefix: null   # no measurable criteria exist
+    criteria_esp32: []
+    conflicts_with:
+      - target: Resource Efficient
+        why: "test hooks, assertion code, and instrumentation add footprint — usually compiled out in release builds (`NDEBUG`), but seams and indirection can persist."
+    depends_on:
+      - target: Maintainable
+        why: "the logic/I-O separation that makes code maintainable is exactly what makes it unit-testable, and observability provides the oracles tests assert against."
+      - target: Observable
+        why: "the logic/I-O separation that makes code maintainable is exactly what makes it unit-testable, and observability provides the oracles tests assert against."
+    reinforces:
+      - target: Deterministic
+        why: "repeatable, deterministic behavior makes tests stable instead of flaky."
+      - target: Portable
+        why: "host-portable code runs in CI; security testing (fuzzing, negative tests) rides on the same harness."
+      - target: Secure
+        why: "host-portable code runs in CI; security testing (fuzzing, negative tests) rides on the same harness."
+    enables:
+      - target: Reliable
+        why: "verified recovery paths underpin reliability; exhaustively-tested fail-safe behavior underpins safety; CI test gates make OTA releases trustworthy."
+      - target: Safety
+        why: "verified recovery paths underpin reliability; exhaustively-tested fail-safe behavior underpins safety; CI test gates make OTA releases trustworthy."
+      - target: Upgradeable
+        why: "verified recovery paths underpin reliability; exhaustively-tested fail-safe behavior underpins safety; CI test gates make OTA releases trustworthy."
+
+  - name: Upgradeable
+    number: 10
+    definition: "Upgradeability is the capacity to safely change deployed software in the field — firmware over-the-air (OTA) on MCUs, package or image updates on Linux — with **atomicity** (no half-applied state), **rollback** (recover from a bad update), and **authentication** (only legitimate updates apply). The canonical mechanism is A/B (dual-bank) partitioning: write the new image to the inactive slot, validate, switch, and roll back if it fails to confirm health."
+    in_rsmr: false
+    criteria_prefix: null   # no measurable criteria exist
+    criteria_esp32: []
+    conflicts_with:
+      - target: Resource Efficient
+        why: "A/B partitioning roughly doubles flash usage and OTA buffers consume RAM."
+      - target: Safety
+        why: "field-updating safety-critical logic demands re-validation and locked/signed safety partitions; sometimes safety logic is deliberately excluded from OTA."
+      - target: Deterministic
+        why: "larger images, bootloader checks, and update machinery add flash-access latency and timing variance."
+    depends_on:
+      - target: Secure
+        why: "updates must be authenticated/signed (an unauthenticated OTA path is a remote-code-execution vector), and security itself depends on the ability to patch vulnerabilities — the one bidirectional dependency in the set."
+      - target: Reliable
+        why: "safe upgrade requires reliable rollback/anti-bricking; conversely, **each update is a reliability-risk window** (the leading cause of field failures), which is why rollback is mandatory."
+    reinforces:
+      - target: Maintainable
+        why: "CI test gates make releases safe; telemetry confirms rollout and triggers rollback; a portable update abstraction spans fleet hardware variants; clean modules make updates surgical."
+      - target: Testable
+        why: "CI test gates make releases safe; telemetry confirms rollout and triggers rollback; a portable update abstraction spans fleet hardware variants; clean modules make updates surgical."
+      - target: Observable
+        why: "CI test gates make releases safe; telemetry confirms rollout and triggers rollback; a portable update abstraction spans fleet hardware variants; clean modules make updates surgical."
+      - target: Portable
+        why: "CI test gates make releases safe; telemetry confirms rollout and triggers rollback; a portable update abstraction spans fleet hardware variants; clean modules make updates surgical."
+    enables:
+      - target: Scalable
+        why: "fleet-scale operation is impossible without remote update."
+
+  - name: Secure
+    number: 11
+    definition: "Security is protection of the system and its data against unauthorized access, tampering, and disclosure — across confidentiality (encryption of data at rest and in transit), integrity (signatures, secure boot, authenticated updates), authenticity (per-device identity, mutual TLS), and availability (resistance to denial-of-service). For field IoT it centrally includes **never hardcoding secrets**, establishing a hardware root of trust, and authenticating every external command."
+    in_rsmr: false
+    criteria_prefix: null   # no measurable criteria exist
+    criteria_esp32: []
+    depended_on_by:
+      - target: Scalable
+        why: "fleet operation requires secure per-device identity and provisioning."
+    conflicts_with:
+      - target: Deterministic
+        why: "cryptographic operations have data-dependent timing (constant-time implementations mitigate but cost cycles); secure-boot verification adds boot latency."
+      - target: Observable
+        why: "logs and telemetry can leak secrets and form an exfiltration/attack surface, forcing redaction and channel authentication."
+      - target: Portable
+        why: "the strongest roots of trust (eFuse, RDP, secure elements) are hardware-specific and non-portable."
+      - target: Resource Efficient
+        why: "crypto consumes CPU, RAM, flash, and energy; secure boot and TLS handshakes add startup time and power draw."
+    depends_on:
+      - target: Upgradeable
+        why: "vulnerabilities discovered post-deployment can only be closed by patching, and the update path itself must be secured — bidirectional."
+    reinforces:
+      - target: Robust
+        why: "input validation is shared with robustness; integrity checks (CRC/signatures) serve reliability; preventing forged commands prevents unsafe actuation."
+      - target: Reliable
+        why: "input validation is shared with robustness; integrity checks (CRC/signatures) serve reliability; preventing forged commands prevents unsafe actuation."
+      - target: Safety
+        why: "input validation is shared with robustness; integrity checks (CRC/signatures) serve reliability; preventing forged commands prevents unsafe actuation."
+      - target: Maintainable
+        why: "clean secret/config separation keeps credentials out of logic and eases patching; the test harness hosts fuzzing and negative security tests."
+      - target: Testable
+        why: "clean secret/config separation keeps credentials out of logic and eases patching; the test harness hosts fuzzing and negative security tests."
+
+  - name: Resource Efficient
+    number: 12
+    definition: "Resource efficiency is the economical use of the scarce resources of the target — CPU cycles, RAM, flash/storage, energy, and network bandwidth — to meet requirements with margin to spare. On an MCU this is dominated by static memory budgeting, low-power sleep modes, and avoiding waste in hot paths; on a battery/solar field node, energy per useful operation is often the binding constraint that determines service life between maintenance visits."
+    in_rsmr: false
+    criteria_prefix: null   # no measurable criteria exist
+    criteria_esp32: []
+    conflicts_with:
+      - target: Robust
+        why: "guards, retries, redundancy, watchdog margins, and independent monitoring all cost cycles, RAM, and energy."
+      - target: Reliable
+        why: "guards, retries, redundancy, watchdog margins, and independent monitoring all cost cycles, RAM, and energy."
+      - target: Safety
+        why: "guards, retries, redundancy, watchdog margins, and independent monitoring all cost cycles, RAM, and energy."
+      - target: Observable
+        why: "logging buffers, core-dump regions, and telemetry uplink consume RAM, flash, bandwidth, and power."
+      - target: Secure
+        why: "cryptography and secure boot consume CPU, memory, and energy and add latency."
+      - target: Upgradeable
+        why: "A/B partitioning doubles flash; OTA buffers consume RAM."
+      - target: Scalable
+        why: "dimensioning structures for the maximum SKU wastes memory on smaller variants; more features cost more flash."
+      - target: Maintainable
+        why: "abstraction layers, readability, port indirection, and test scaffolding all add footprint versus hand-tuned, target-specific code."
+      - target: Portable
+        why: "abstraction layers, readability, port indirection, and test scaffolding all add footprint versus hand-tuned, target-specific code."
+      - target: Testable
+        why: "abstraction layers, readability, port indirection, and test scaffolding all add footprint versus hand-tuned, target-specific code."
+    reinforces:
+      - target: Deterministic
+        why: "static allocation and the absence of garbage collection serve both leanness and predictable timing — the single attribute resource efficiency cooperates with."
+

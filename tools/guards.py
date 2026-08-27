@@ -38,7 +38,7 @@ LEGACY_HEADERS = {
     "driver/i2s.h": "driver/i2s_std.h or driver/i2s_pdm.h (removed in v6.0)",
     "driver/timer.h": "driver/gptimer.h (removed in v6.0)",
     "driver/pcnt.h": "driver/pulse_cnt.h (removed in v6.0)",
-    "driver/mcpwm.h": "driver/mcpwm_prelude (removed in v6.0)",
+    "driver/mcpwm.h": "driver/mcpwm_prelude.h (removed in v6.0)",
     "driver/rmt.h": "driver/rmt_tx.h and driver/rmt_rx.h (removed in v6.0)",
     "driver/sigmadelta.h": "driver/sdm.h (removed in v6.0)",
     "driver/temp_sensor.h": "driver/temperature_sensor.h (removed in v6.0)",
@@ -438,14 +438,82 @@ REGISTRY = [
 LEVEL_RANK = {"advisory": 0, "guard": 1, "strict": 2}
 
 
-def implemented_guards(enforcement):
+# ============================================================== preconditions
+#
+# A guard whose context is missing returns no findings, and nothing distinguishes
+# that from a file it read and found clean. The digest would then advertise it in
+# `active_guards` while it examined nothing - silence presented as cleanliness,
+# which is the failure mode this framework exists to prevent (invariant I3).
+#
+# So each guard declares what it needs. Two kinds of shortfall, and the
+# difference matters to the engineer reading the digest:
+#
+#   dormant - the guard cannot run at all. It is not active and must not be
+#             advertised as such.
+#   partial - it runs, but one branch cannot fire. Still active, with the
+#             blind spot named.
+
+
+def _pc_kconfig(ctx):
+    if not ctx.get("kconfig_symbols"):
+        return ("dormant",
+                "no sdkconfig has been generated, so there is no symbol table to "
+                "check spellings against and every CONFIG_ name passes unexamined. "
+                "Run `idf.py set-target <target>` or a build to populate it")
+    return None
+
+
+def _pc_core_pin(ctx):
+    if not [t for t in (ctx.get("targets") or []) if t.get("configured")]:
+        return ("partial",
+                "no configured target in the cache, so the CONFIG_FREERTOS_UNICORE "
+                "branch cannot fire - pinning to core 1 on a single-core target "
+                "will pass here and fail on the device. The 'core 2 does not "
+                "exist' branch is unaffected")
+    return None
+
+
+PRECONDITIONS = {"kconfig-exists": _pc_kconfig, "core-pin": _pc_core_pin}
+
+
+def precondition(gid, ctx):
+    """(kind, reason) when guard `gid` cannot fully run against `ctx`, else None."""
+    fn = PRECONDITIONS.get(gid)
+    return fn(ctx or {}) if fn else None
+
+
+def guard_status(enforcement, ctx=None):
+    """(active, degraded) where degraded is [(id, kind, reason)].
+
+    `active` is what may honestly be advertised. Without a ctx this cannot be
+    judged, so every implemented guard is listed and `degraded` is empty - the
+    caller has asked a question it did not supply the evidence for.
+    """
+    rank = LEVEL_RANK.get(enforcement, 0)
+    names = [g[0] for g in REGISTRY if g[4] and LEVEL_RANK[g[1]] <= max(rank, 1)]
+    if ctx is None:
+        return names, []
+    active, degraded = [], []
+    for n in names:
+        pc = precondition(n, ctx)
+        if pc is None:
+            active.append(n)
+            continue
+        degraded.append((n, pc[0], pc[1]))
+        if pc[0] != "dormant":
+            active.append(n)
+    return active, degraded
+
+
+def implemented_guards(enforcement, ctx=None):
     """Guards that actually run at this enforcement level.
 
     The digest reads this rather than a hand-written list, so it can never
     advertise a guard that does not exist (invariant I2, applied to ourselves).
+    Pass `ctx` and a guard whose precondition is unmet is excluded too - existing
+    is not the same as being able to check anything.
     """
-    rank = LEVEL_RANK.get(enforcement, 0)
-    return [g[0] for g in REGISTRY if g[4] and LEVEL_RANK[g[1]] <= max(rank, 1)]
+    return guard_status(enforcement, ctx)[0]
 
 
 def run(path, text, ctx):
@@ -453,6 +521,10 @@ def run(path, text, ctx):
     for gid, level, applies, fn, impl in REGISTRY:
         if not impl or applies is None or not applies(path):
             continue
+        # A dormant guard is reported by the digest, not here: the hook is silent
+        # on a clean file, so it asserts nothing that needs correcting, and a
+        # per-write notice on every .c file would only teach the engineer to
+        # scroll past guard output.
         try:
             for f in fn(path, text, ctx) or []:
                 f["level"] = level

@@ -53,10 +53,32 @@ A denial is overridable through the normal permission flow. The reason text says
 | `warn-suppress` | guard | `sdkconfig*` | ✅ |
 | `legacy-driver` | guard | C/C++ sources | ✅ |
 | `arduino-ban` | guard | C/C++ sources | ✅ |
-| `numeric-claim` | strict | markdown under `design/`, `hardware/`, `reliability/`, `tracking/pic-audit/dossiers/` | ✅ |
+| `numeric-claim` | guard | markdown under `design/`, `hardware/`, `reliability/`, `tracking/pic-audit/dossiers/` | ✅ |
 | `evidence-path` | strict | — | ❌ not built |
 
 `stage_kernel.py` imports `guards.implemented_guards()` for the digest's `active_guards`, so an unimplemented guard can never be advertised as active. This is invariant I2 applied to the framework itself.
+
+Run `python tools/stage_kernel.py selftest` to confirm this table still matches `guards.REGISTRY`, and that every replacement the `legacy-driver` table recommends exists in the installed IDF. Both drifted once; a hand-written table is a stale-able fact, which is exactly what I2 forbids.
+
+### 3.1 Preconditions — existing is not the same as being able to check
+
+A guard whose context is missing returns no findings, and nothing distinguishes that from a file it read and found clean. Listing such a guard as `active` presents silence as cleanliness — the failure this framework exists to prevent (invariant I3).
+
+Each guard therefore declares what it needs, and the digest reports two kinds of shortfall separately:
+
+| kind | meaning | digest |
+|---|---|---|
+| `dormant` | the guard cannot run at all | dropped from `active_guards`, listed under `dormant_guards` with the remedy |
+| `partial` | it runs, but one branch cannot fire | stays in `active_guards`, listed under `partial_guards` with the blind spot named |
+
+| guard | needs | without it |
+|---|---|---|
+| `kconfig-exists` | a symbol table from any `sdkconfig` | **dormant** — every `CONFIG_` name passes unexamined |
+| `core-pin` | a configured target in the cache | **partial** — the `CONFIG_FREERTOS_UNICORE` branch cannot fire, so pinning to core 1 on a single-core target passes here and fails on the device. The *core 2 does not exist* branch is unaffected |
+
+`legacy-driver` reads `idf_version` but does not depend on it: without one it omits the *deprecated rather than removed* annotation and still fires.
+
+A dormant guard is reported by the digest, not by the hook. The hook is silent on a clean file, so it asserts nothing needing correction, and a per-write notice on every `.c` file would only teach the engineer to scroll past guard output.
 
 ---
 

@@ -17,6 +17,9 @@ The directory structure mirrors the install target, so installation is a copy or
 | `STAGE_STATE_SCHEMA.md` | — (reference only) | Specification of `stage-state.yaml` and `.stage-cache.json` |
 | `MCP_SPEC.md` | — (reference only) | Evidence wiring: the two MCP servers, the Bash allowlist, build-log capture |
 | `spec-defects.yaml` | — (data, read by the digest) | Verified defects in the workflow specification itself |
+| `quality-attributes.yaml` | — (data, extracted) | Twelve-attribute vocabulary and the 44-edge conflict graph |
+| `rsmr-matrix.yaml` | — (data, extracted) | SECTION 5 §7.1 matrix, 40 criteria × 5 stages, plus the debt ceiling |
+| `RSMR_SPEC.md` | — (reference only) | Stage obligations, deferral validity, and the §7 Totals defect |
 | `GATE_SPEC.md` | — (reference only) | Gate verdicts, the adversary, and the dossier |
 | `CLOSURE_SPEC.md` | — (reference only) | Claim closure, observation sources, the `KERNEL_OBS` convention |
 | `templates/` | — (copied per project) | `stage-state.template.yaml` — 11-line bootstrap for a new project |
@@ -132,6 +135,8 @@ This table records the *current* baseline for the framework's own calibration. P
 | 2 | `PreToolUse` guards - `hooks/GUARD_SPEC.md`, `tools/guards.py`, `hooks/pre_tool_use_guard.ps1` | Done |
 | 3 | MCP wiring + build-log evidence - `MCP_SPEC.md`, `tools/idf_run.ps1`, `tools/idf_mcp_launch.ps1` | Done |
 | 4 | Gate validator, adversary subagent, dossier skill - `GATE_SPEC.md`, `tools/gates.py`, `agents/gate-adversary.md`, `skills/gate-dossier/` | Done |
+| 5 | RSMR x Stage obligations - `RSMR_SPEC.md`, `tools/rsmr.py`, `tools/extract_rsmr.py`, `rsmr-matrix.yaml` | Done |
+| 6 | Framework self-test - `stage_kernel.py selftest`: guard registry vs `GUARD_SPEC.md`, legacy-header table vs the installed IDF, extracted copies vs their specification | Done |
 
 **This is the whole agent.** Phases 0-4 implement human-in-the-loop support for SECTION 1: stage awareness, anti-hallucination guards, gate readiness with an adversary, and a decision boundary the agent cannot cross.
 
@@ -158,6 +163,52 @@ The exemptions must be preserved exactly. `Blocking: <= 10 ms` is a contract, no
 **Review.** SECTION 2 sec.8 is not a gate: it runs *inside* a stage, and its FAIL edge returns to the Measurable Requirements Table rather than to the artifact that failed — so that table is re-edited each cycle, and the never-renumbered invariant depends on snapshotting it. The four verdicts, anchor-to-text discipline, adversary and dossier transfer unchanged; only a second anchor surface and a `design_review_decided` event are new.
 
 Its most valuable output needs no checks at all: of 44 items, **18 make a universal claim** — *every*, *all*, *each* — over a set no file enumerates. A review reporting 41 unverifiable criteria has shown the engineer exactly where confidence rested on feeling. Two items are `MACHINE_REFUTED` today: both cite `CLAUDE.md sec.2` and `sec.5`, and that file has no numbered sections.
+
+### Quality attributes — binding a requirement to what it buys
+
+SECTION 1's stage bar is written in RSMR. SECTION 5 supplies measurable criteria for those four attributes and for no others. *Embedded IoT Engineering Quality Attributes — Cross-Platform Reference* defines **twelve**, with per-platform patterns and a declared relationship graph. SECTION 2's requirements table binds to none of them, so a `Measurable Target` is a number with no stated relationship to the quality it purchases or the method that would measure it.
+
+An optional **Attribute** column closes that. `quality-attributes.yaml` is **extracted mechanically** from the reference by `tools/extract_attrs.py` — not paraphrased, because a graph an LLM restated drifts from its source with nobody noticing — and carries the source hash so a stale copy is detectable.
+
+| Check | Establishes |
+|---|---|
+| `attribute-vocabulary` | Names come from the closed twelve |
+| `attribute-measurable` | Flags requirements resting only on attributes nothing can measure |
+| `attribute-conflicts` | The trade-offs this requirement set has bought into, quoted from the reference |
+| `target-binds-criterion` | Targets cite real SECTION 5 criteria; a fabricated id is caught on any row |
+
+**Eight of the twelve have no measurable criteria anywhere.** Safety, Deterministic, Portable, Observable, Testable, Upgradeable, Secure and Resource Efficient carry definitions and patterns but no pass condition, so a requirement resting only on them is unverifiable by construction. Reporting that count is the same move as the 18-of-44 in the §8 review: naming what cannot be established is the product.
+
+Conflicts report as `MACHINE_CHECKED`, not as failures. A project claiming both `Robust` and `Deterministic` is told *"defensive branches and retries widen WCET and add data-dependent execution paths"* — a cost already accepted, surfaced while the design can still change.
+
+The column is a **local convention**; SECTION 2 §2.1 does not mandate it. Without it the attribute checks report `UNVERIFIABLE` rather than failing. `templates/REQ-register.template.md` is the ready-to-copy table.
+
+### Section 5 — RSMR × Stage obligations
+
+SECTION 5 §7.1 is the most quantified thing in the whole specification: 40 criteria against 5 stages, each cell `M`, `D`, or `N/A`. It is also the part an engineer cannot hold in their head — S3 alone makes **24 criteria Mandatory**.
+
+`rsmr-matrix.yaml` is **extracted mechanically** by `tools/extract_rsmr.py`, together with the per-stage open-debt ceiling from SECTION 4 §5.4. Two checks run before it will write: the matrix must be monotonic (no criterion weakening as the stage advances — all 40 hold), and the parse must reproduce SECTION 5's own published Totals.
+
+It does not. **The Totals table contradicts the matrix it summarises** at S2, S3 and S4, reporting zero N/A at S3 and S4 and redistributing exactly those rows into M and D. Recorded as `spec-defects.yaml` → `rsmr-totals`; the matrix governs. Trusting the summary would have made the agent demand four extra Mandatory criteria at Gate 3→4, and ask for fleet-scale evidence from a project with no fleet.
+
+The scorecard is **generated from the matrix** rather than copied from §6.2, whose 22-row template — four of them placeholders — cannot express the 40 criteria the gate judges. *"Watchdog coverage verified"* stands for both *Watchdog implemented* and *Watchdog tested*, and cannot record a PASS on one with a FAIL on the other.
+
+| Check | Establishes |
+|---|---|
+| `rsmr-scorecard-covers-stage` | Every M and D criterion has exactly one row; none duplicated |
+| `rsmr-mandatory-verdicts` | No Mandatory criterion is FAIL, blank, malformed, or deferred |
+| `rsmr-deferrals-valid` | Every unmet Deferrable cites a real DEBT that comes due at or before the stage it becomes Mandatory |
+| `rsmr-evidence-reference` | Every PASS cites a locatable reference — §6.3 rule 4, *"test passed" is not evidence* |
+| `debt-ceiling` · `debt-severity` · `debt-overdue` · `debt-acceptance` | SECTION 4 §5.3–5.5: count, severity, due date, and who may be accepted when |
+
+**None of the 40 criteria is machine-checked, and the tool says so on every run.** *Thermal budget measured*, *Code reviewed by second engineer* — no static check settles those. What is mechanical is whether the assessment is complete and its deferrals valid, and that is the part worth automating:
+
+```
+RSMR-08: DEBT-002 revisits at S5, but this criterion becomes Mandatory at S4
+         - the debt comes due after the gate it was meant to clear
+```
+
+`RSMR_SPEC.md` carries the full matrix, the defect analysis, and the check boundaries.
 
 ### Deliberately out of scope
 

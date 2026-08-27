@@ -25,6 +25,9 @@
 # what makes a stale register detectable rather than silently trusted.
 
 source: workflow-iot/WORKFLOW_SECTION2.md
+sources:            # further specification files this register covers
+  - path: workflow-iot/WORKFLOW_SECTION5.md
+    sha256: 79619c2a50410e17ee1f0499880277a2ff9121b2a444183f5a209a710017f9d3
 verified_on: 2026-08-26
 verified_against: ESP-IDF v6.0.2 (C:/esp/v6.0.2/esp-idf)
 spec_sha256: 76265220fbd4816f84027220ed8c294b018d54fff1191eb01fa5593da524f9a9
@@ -167,6 +170,38 @@ defects:
       CLAUDE.md contains no numbered sections at all - only [SYSTEM] and
       [CONSTRAINTS] markers. Both checklist items are dangling references and
       can be MACHINE_REFUTED today.
+
+  # --- SECTION5: a derived summary that contradicts the table it summarises ---
+
+  - id: rsmr-totals
+    source: workflow-iot/WORKFLOW_SECTION5.md
+    lines: [535, 539, 540, 541, 542, 543]
+    class: structural
+    digest: false
+    says: >-
+      the sec.7 Totals table declares Stage 2 = 5 M / 16 D / 19 N-A,
+      Stage 3 = 28 M / 12 D / 0 N-A, Stage 4 = 38 M / 2 D / 0 N-A
+    correct: >-
+      Counted mechanically from the sec.7.1 matrix the table summarises
+      (tools/extract_rsmr.py, which refuses to write its output when the two
+      disagree): Stage 2 is 5 M / 10 D / 25 N-A, Stage 3 is 24 M / 8 D / 8 N-A,
+      Stage 4 is 34 M / 2 D / 4 N-A. Stages 1 and 5 match exactly.
+
+      The matrix is the correct artifact and the summary is the defective one.
+      Three findings support that. First, the matrix is internally sound: all
+      40 rows are monotonic under N-A < D < M, so no criterion ever weakens as
+      the stage advances. Second, the discrepancies are not scattered - the
+      Totals table reports 0 N-A at both Stage 3 and Stage 4, and the surplus it
+      assigns to M and D is exactly the 8 and 4 rows that the matrix marks N-A
+      there. Third, those rows are self-evidently inapplicable before Stage 5:
+      "Fleet MTBF vs. predicted comparison" and "Fleet config drift monitoring"
+      cannot be assessed on a pre-production unit. The summary appears to have
+      been computed as though N-A ceased to exist past Stage 2.
+
+      Consequence if the Totals table is trusted: an agent would demand four
+      more Mandatory criteria at Gate 3->4 than the matrix requires, and would
+      demand fleet-scale evidence from a project that has no fleet. sec.7.2 and
+      sec.7.3 both operate on individual cells, so the matrix governs.
 
 # Investigated and found NOT to be defects. Recorded so they are not re-raised.
 rejected:

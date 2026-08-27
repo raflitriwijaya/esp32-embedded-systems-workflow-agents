@@ -32,6 +32,7 @@ try:
     import guards
     import gates
     import design_check
+    import rsmr
 except ImportError:  # guards.py sits beside this file
     sys.path.insert(0, str(Path(__file__).resolve().parent))
 SCHEMA_VERSIONS_UNDERSTOOD = [1]
@@ -540,6 +541,23 @@ def load_spec_defects():
         return None
 
 
+def _register_sources(reg):
+    """[(path, recorded_sha)] - every specification file the register covers.
+
+    The register began covering SECTION2 alone. A defect found in SECTION5's
+    Totals table then had nowhere to live that carried a hash, and an entry with
+    no hash is exactly the stale-able fact invariant I2 forbids. Both spellings
+    are honoured so existing registers keep working.
+    """
+    out = []
+    if reg.get("source"):
+        out.append((reg["source"], reg.get("spec_sha256")))
+    for e in (reg.get("sources") or []):
+        if isinstance(e, dict) and e.get("path"):
+            out.append((e["path"], e.get("sha256")))
+    return out
+
+
 def spec_defect_status(reg):
     """Returns (stale_reason, defects) - stale_reason is None when trustworthy.
 
@@ -548,9 +566,8 @@ def spec_defect_status(reg):
     changed specification makes it detectable rather than silently trusted."""
     if not reg:
         return "register absent", []
-    src = reg.get("source")
-    stale = None
-    if src:
+    reasons = []
+    for src, recorded in _register_sources(reg):
         for base in (Path(__file__).resolve().parents[2], Path.cwd()):
             cand = base / src
             if cand.is_file():
@@ -558,18 +575,18 @@ def spec_defect_status(reg):
                 # Coerce: an all-digit hash written unquoted is parsed by YAML
                 # as an integer, and an integer 0 is falsy - which would report
                 # "not stamped" for a hash that is merely wrong. Found by test.
-                recorded = reg.get("spec_sha256")
                 recorded = str(recorded) if recorded is not None else None
                 if not recorded or recorded == "None":
-                    stale = ("baseline not stamped - run "
-                             "'stage_kernel.py spec-stamp'")
+                    reasons.append(f"{src} baseline not stamped - run "
+                                   f"'stage_kernel.py spec-stamp'")
                 elif recorded != actual:
-                    stale = (f"{src} changed since verification "
-                             f"({short(recorded)} -> {short(actual)}) - re-verify")
+                    reasons.append(f"{src} changed since verification "
+                                   f"({short(recorded)} -> {short(actual)}) - "
+                                   f"re-verify")
                 break
         else:
-            stale = f"{src} not reachable from here"
-    return stale, (reg.get("defects") or [])
+            reasons.append(f"{src} not reachable from here")
+    return ("; ".join(reasons) or None), (reg.get("defects") or [])
 
 
 def build_cache(root: Path, state, state_sha) -> dict:
@@ -776,6 +793,40 @@ def render_platform(cache, stale_reason) -> list[str]:
     return L
 
 
+def _rsmr_digest_lines(root: Path, state, stage):
+    """What the stage obliges, and whether the record answers it.
+
+    The count is the useful part at session start: 24 mandatory criteria at S3
+    is not something an engineer carries in their head, and the digest is where
+    it costs nothing to say.
+    """
+    obl = rsmr.obligations(stage)
+    if obl is None:
+        return []
+    m, d, n = obl
+    L = ["rsmr_obligations:   # SECTION5 sec.7.1",
+         f"  mandatory: {len(m)}   # may not be deferred at this stage",
+         f"  deferrable: {len(d)}   # each needs a DEBT with revisit_stage <= "
+         f"the stage it becomes mandatory",
+         f"  not_applicable: {len(n)}"]
+    try:
+        findings = rsmr.run(root, state)
+    except Exception:                                  # noqa: BLE001
+        return L + ["  record: null   # checks did not run"]
+    su = rsmr.summarise(findings)
+    ref = [f for f in findings if f["status"] == rsmr.REFUTED]
+    skip = [f for f in findings if f["status"] == rsmr.SKIPPED]
+    L.append(f"  record: {{ checked: {su['machine_checked']}, refuted: "
+             f"{su['machine_refuted']}, unverifiable: {su['unverifiable']} }}")
+    for f in ref[:4]:
+        L.append(f"    - REFUTED {f['check']}: {f['why']}")
+    if skip and not ref:
+        L.append(f"    - not assessable yet: "
+                 f"{', '.join(f['check'] for f in skip[:4])}")
+    L.append("")
+    return L
+
+
 def render_digest(root: Path, state, state_sha, cache, stale_reason) -> str:
     cur = state.get("current") or {}
     stage = cur.get("stage")
@@ -825,6 +876,18 @@ def render_digest(root: Path, state, state_sha, cache, stale_reason) -> str:
     except Exception:                              # noqa: BLE001
         gsum = None
 
+    # A guard that exists is not the same as a guard that can check anything.
+    # kconfig-exists needs a symbol table; without one it returns no findings for
+    # every file, and listing it as active would present that silence as a clean
+    # result. Ask the guards themselves rather than asserting from a static list.
+    try:
+        _gactive, _gdeg = guards.guard_status(cur.get("enforcement"),
+                                              _guard_context(root, state))
+    except Exception:                              # noqa: BLE001
+        _gactive, _gdeg = guards.implemented_guards(cur.get("enforcement")), []
+    _gdormant = [d for d in _gdeg if d[1] == "dormant"]
+    _gpartial = [d for d in _gdeg if d[1] == "partial"]
+
     L = [HEADER,
          f"kernel: {{ project: {y(project)}, generated: {y(now_iso())}, status: OK }}",
          "",
@@ -841,12 +904,18 @@ def render_digest(root: Path, state, state_sha, cache, stale_reason) -> str:
          f"  is_stage_default: "
          f"{y(cur.get('enforcement') == meta['enforcement_default'])}",
          "  overridable_by_engineer: true",
-         f"  active_guards: "
-         f"{ylist(guards.implemented_guards(cur.get('enforcement')))}",
+         f"  active_guards: {ylist(_gactive)}",
+         *([] if not _gdormant else
+           ["  dormant_guards:   # implemented, but cannot check anything here",
+            *[f"    - {n}: {r}" for n, _kind, r in _gdormant]]),
+         *([] if not _gpartial else
+           ["  partial_guards:   # running, with a named blind spot",
+            *[f"    - {n}: {r}" for n, _kind, r in _gpartial]]),
          "  guards_denying: " + ("false   # advisory: findings are surfaced as "
                                  "context, never denied"
                                  if cur.get('enforcement') == 'advisory' else "true"),
          "",
+         *_rsmr_digest_lines(root, state, stage),
          "next_gate:",
          f"  gate: {y(gate)}",
          f"  spec: {y(gsrc or 'SECTION1 §3 (not reachable from here)')}",
@@ -943,6 +1012,25 @@ def render_digest(root: Path, state, state_sha, cache, stale_reason) -> str:
                 L.append(f"    - {y(f['check'] + ': ' + f['why'])}")
         L.append("  rule: these establish SHAPE only - never whether a "
                  "requirement is right or a target is true")
+        # Quality attributes: what the project claims to be buying, and what of
+        # that no criterion anywhere can settle.
+        try:
+            aspec = design_check.load_attributes()
+            reg = ((state.get("current") or {}).get("registers") or {})
+            arows, has_col = design_check._attr_cells(root, reg)
+        except Exception:                              # noqa: BLE001
+            aspec, arows, has_col = None, None, False
+        if aspec and arows and has_col:
+            crit = {a["name"]: (a.get("criteria_esp32") or [])
+                    for a in aspec["attributes"]}
+            claimed = sorted({n for _, _, names, _ in arows for n in names})
+            unmeas = [n for n in claimed if not crit.get(n)]
+            L.append("  attributes:")
+            L.append(f"    claimed: {ylist(claimed)}")
+            if unmeas:
+                L.append(f"    no_measurable_criteria: {ylist(unmeas)}")
+                L.append("    rule: a requirement resting only on these is "
+                         "UNVERIFIABLE by construction - SECTION5 covers RSMR only")
         L.append("")
 
     unknowns = (cache or {}).get("unknowns") or []
@@ -1178,10 +1266,21 @@ def _gate_context(root: Path, state):
             cache = {}
     cache = cache or {}
     gt = cache.get("ground_truth", {})
+    # Read the symbol table here too. It was hardcoded to None, which no current
+    # gate check happens to consult - but a future one would have been silently
+    # dormant with nothing to reveal it, which is how the kconfig-exists hole
+    # opened in the first place.
+    syms = set()
+    for t in (gt.get("targets") or []):
+        sk = t.get("sdkconfig")
+        if sk and Path(sk).is_file():
+            syms |= set(parse_sdkconfig(Path(sk)))
+    if not syms and (root / "sdkconfig").is_file():
+        syms = set(parse_sdkconfig(root / "sdkconfig"))
     return {"root": root, "state": state,
             "targets": gt.get("targets") or [],
             "idf_version": (gt.get("idf_installed") or {}).get("version"),
-            "kconfig_symbols": None}
+            "kconfig_symbols": syms or None}
 
 
 def evaluate_gate(root: Path, state, gate: str):
@@ -1261,21 +1360,107 @@ def cmd_spec_stamp(root: Path) -> int:
     if not reg:
         print(f"{SPEC_DEFECTS_FILE} not found or unreadable", file=sys.stderr)
         return 2
-    src = reg.get("source")
-    spec = None
-    for base in (Path(__file__).resolve().parents[2], Path.cwd()):
-        if (base / src).is_file():
-            spec = base / src
-            break
-    if spec is None:
-        print(f"{src} not reachable", file=sys.stderr)
-        return 2
-    digest_hex = sha256_file(spec)
     text = reg_path.read_text(encoding="utf-8")
-    text = re.sub(r"^spec_sha256:.*$", f"spec_sha256: {digest_hex}",
-                  text, count=1, flags=re.M)
+    done, missing = [], []
+    for src, _rec in _register_sources(reg):
+        spec = None
+        for base in (Path(__file__).resolve().parents[2], Path.cwd()):
+            if (base / src).is_file():
+                spec = base / src
+                break
+        if spec is None:
+            missing.append(src)
+            continue
+        digest_hex = sha256_file(spec)
+        if src == reg.get("source"):
+            text = re.sub(r"^spec_sha256:.*$", f"spec_sha256: {digest_hex}",
+                          text, count=1, flags=re.M)
+        else:
+            # Stamp the sha that follows this path inside the `sources:` list.
+            pat = (r"(-\s+path:\s*" + re.escape(src) + r"\s*\n\s+sha256:)[^\n]*")
+            text, n = re.subn(pat, r"\1 " + digest_hex, text, count=1)
+            if not n:
+                missing.append(f"{src} (no sha256 line to stamp)")
+                continue
+        done.append(f"{src} ({short(digest_hex)})")
+    if not done:
+        print("nothing stamped: " + ", ".join(missing or ["no sources listed"]),
+              file=sys.stderr)
+        return 2
     reg_path.write_text(text, encoding="utf-8")
-    print(f"stamped {SPEC_DEFECTS_FILE} against {src} ({short(digest_hex)})")
+    print(f"stamped {SPEC_DEFECTS_FILE} against:")
+    for d in done:
+        print(f"  {d}")
+    for m in missing:
+        print(f"  ! not reachable: {m}", file=sys.stderr)
+    return 0
+
+
+def cmd_rsmr(root: Path) -> int:
+    """SECTION5 sec.7 - what this stage obliges, and whether the record answers it."""
+    try:
+        state, _ = load_state(root)
+    except StateError as e:
+        print(f"cannot apply the RSMR matrix: {e}", file=sys.stderr)
+        return 2
+    stage = (state.get("current") or {}).get("stage")
+    findings = rsmr.run(root, state)
+    summary = rsmr.summarise(findings)
+    obl = rsmr.obligations(stage)
+    print(f"RSMR x STAGE   stage {stage}")
+    if obl:
+        m, d, n = obl
+        print(f"  obligations: {len(m)} mandatory | {len(d)} deferrable | "
+              f"{len(n)} not applicable   (SECTION5 sec.7.1)")
+    print(f"  checks: machine-checked {summary['machine_checked']} | refuted "
+          f"{summary['machine_refuted']} | unverifiable {summary['unverifiable']}")
+    for f in findings:
+        print(NL + f"  [{f['status']}] {f['check']}")
+        print(f"     {f['why']}")
+        for e in f["evidence"][:8]:
+            print(f"     - {e}")
+        for h in f["hints"][:3]:
+            print(f"     hint: {h}")
+    print(NL + "  These establish that the assessment is complete and its "
+          "deferrals valid.")
+    print("  Not one of them establishes that a criterion is actually met - "
+          "that is the")
+    print("  engineer's assessment, and it stays that way.")
+    return 0
+
+
+def cmd_rsmr_scorecard(root: Path) -> int:
+    """Write a scorecard whose rows are exactly this stage's criteria."""
+    try:
+        state, _ = load_state(root)
+    except StateError as e:
+        print(f"cannot generate a scorecard: {e}", file=sys.stderr)
+        return 2
+    cur = state.get("current") or {}
+    stage = cur.get("stage")
+    text = rsmr.render_scorecard(stage, (state.get("project") or {}).get("id"))
+    if text is None:
+        print(f"stage {stage!r} is not one of {', '.join(rsmr.STAGES)}",
+              file=sys.stderr)
+        return 2
+    reg = cur.get("registers") or {}
+    rel = reg.get("rsmr_scorecard") or f"quality/rsmr-scorecard-{stage}.md"
+    out = root / str(rel)
+    if out.exists():
+        # Overwriting would destroy recorded verdicts, which are the engineer's
+        # own assessment and not something this tool may discard.
+        print(f"{rel} already exists - not overwritten. Delete it, or point "
+              f"current.registers.rsmr_scorecard elsewhere.", file=sys.stderr)
+        return 2
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(text, encoding="utf-8")
+    m, d, n = rsmr.obligations(stage)
+    print(f"wrote {rel}")
+    print(f"  {len(m)} mandatory + {len(d)} deferrable rows to fill, "
+          f"{len(n)} listed as not applicable at {stage}")
+    if not reg.get("rsmr_scorecard"):
+        print(NL + "  Set this in stage-state.yaml so the checks can find it:")
+        print(f"    current.registers.rsmr_scorecard: {rel}")
     return 0
 
 
@@ -1340,6 +1525,161 @@ def cmd_design_review(root: Path) -> int:
     return 0
 
 
+# ================================================================== self-test
+#
+# GUARD_SPEC.md carried `numeric-claim | strict` for as long as the registry
+# carried `guard`. Nothing could notice, because a markdown table is a fact
+# stored by hand - precisely what invariant I2 forbids the engineer from doing,
+# applied here to the framework's own documentation.
+#
+# Correcting the cell fixes one instance. This makes the class detectable.
+
+_SPEC_ROW = re.compile(r"\s*\|\s*`([a-z][a-z0-9-]*)`\s*\|\s*([a-z]+)\s*\|(.*?)\|\s*(.)")
+
+
+def _spec_guard_table():
+    """[(id, level, implemented)] as hooks/GUARD_SPEC.md claims them."""
+    f = Path(__file__).resolve().parent.parent / "hooks" / "GUARD_SPEC.md"
+    if not f.is_file():
+        return None
+    rows = [(m.group(1), m.group(2), m.group(4) == "\u2705")
+            for line in f.read_text(encoding="utf-8").splitlines()
+            for m in [_SPEC_ROW.match(line)] if m]
+    return rows or None
+
+
+def _check_legacy_headers():
+    """Every replacement this framework recommends must exist in the installed IDF.
+
+    `driver/mcpwm.h -> driver/mcpwm_prelude` shipped for weeks: the header name
+    was missing its extension, so the guard fired correctly and then handed the
+    engineer a path that does not exist. The table was written from the migration
+    notes and never checked against the tree it describes.
+    """
+    idf = os.environ.get("IDF_PATH")
+    if not idf or not Path(idf).is_dir():
+        return ["legacy-header table NOT checked: IDF_PATH is unset, so the "
+                "replacements this framework recommends were not confirmed to "
+                "exist (set IDF_PATH and re-run)"], True
+    have = set()
+    for p in Path(idf).rglob("include/**/*.h"):
+        s = p.as_posix()
+        i = s.rfind("/include/")
+        if i >= 0:
+            have.add(s[i + 9:])
+    if not have:
+        return ["legacy-header table NOT checked: no headers found under "
+                f"{idf}"], True
+    bad = []
+    for hdr, repl in guards.LEGACY_HEADERS.items():
+        cands = re.findall(r"[a-z0-9_]+/[a-z0-9_]+\.h", repl)
+        if not cands:
+            bad.append(f"`{hdr}` -> the replacement text names no header file")
+            continue
+        for c in cands:
+            if c not in have:
+                bad.append(f"`{hdr}` -> recommends `{c}`, which does not exist "
+                           f"in the installed IDF")
+    return bad, False
+
+def _check_extracted_freshness():
+    """Extracted copies must still match the specification they were cut from.
+
+    rsmr-matrix.yaml and quality-attributes.yaml are derived files. A derived
+    file whose source has moved on is the stale-able fact invariant I2 exists to
+    catch, so each records the sha256 it was cut from.
+    """
+    here = Path(__file__).resolve().parent.parent
+    bad = []
+    checked = 0
+    for name, fields in (("rsmr-matrix.yaml",
+                          [("source", "source_sha256"),
+                           ("debt_source", "debt_source_sha256")]),
+                         ("quality-attributes.yaml",
+                          [("source", "source_sha256"),
+                           ("criteria_source", "criteria_source_sha256")])):
+        f = here / name
+        if not f.is_file():
+            bad.append(f"{name} is absent - regenerate it")
+            continue
+        try:
+            import yaml
+            d = yaml.safe_load(f.read_text(encoding="utf-8"))
+        except Exception as exc:                       # noqa: BLE001
+            bad.append(f"{name} did not parse: {exc}")
+            continue
+        for pkey, skey in fields:
+            src, rec = d.get(pkey), d.get(skey)
+            if not src:
+                continue
+            for base in (here.parent, Path.cwd()):
+                cand = base / src
+                if cand.is_file():
+                    checked += 1
+                    if str(rec) != sha256_file(cand):
+                        bad.append(f"{name}: {src} changed since extraction "
+                                   f"({short(str(rec))} -> "
+                                   f"{short(sha256_file(cand))}) - regenerate")
+                    break
+            else:
+                bad.append(f"{name}: {src} not reachable from here")
+    return bad, checked
+
+def cmd_selftest(root: Path) -> int:
+    """Check the framework's documentation against the framework's code."""
+    bad = []
+    spec = _spec_guard_table()
+    if spec is None:
+        bad.append("hooks/GUARD_SPEC.md: no guard table found to compare against")
+    else:
+        code = {g[0]: (g[1], bool(g[4])) for g in guards.REGISTRY}
+        doc = {r[0]: (r[1], r[2]) for r in spec}
+        for gid in sorted(set(code) | set(doc)):
+            if gid not in code:
+                bad.append(f"GUARD_SPEC.md documents `{gid}`, which the registry "
+                           f"does not define")
+            elif gid not in doc:
+                bad.append(f"the registry defines `{gid}`, which GUARD_SPEC.md "
+                           f"does not document")
+            else:
+                if code[gid][0] != doc[gid][0]:
+                    bad.append(f"`{gid}`: registry level is {code[gid][0]}, "
+                               f"GUARD_SPEC.md says {doc[gid][0]}")
+                if code[gid][1] != doc[gid][1]:
+                    bad.append(f"`{gid}`: registry implemented={code[gid][1]}, "
+                               f"GUARD_SPEC.md says {doc[gid][1]}")
+        missing = [g for g in guards.PRECONDITIONS if g not in doc]
+        if missing:
+            bad.append(f"guards with a precondition but no GUARD_SPEC row: "
+                       f"{', '.join(sorted(missing))}")
+
+    hdr_bad, hdr_skipped = _check_legacy_headers()
+    fresh_bad, fresh_n = _check_extracted_freshness()
+    bad += fresh_bad
+
+    print("FRAMEWORK SELF-TEST")
+    if hdr_skipped:
+        for h in hdr_bad:
+            print(f"  ~ {h}")
+        hdr_bad = []
+    bad += hdr_bad
+    if bad:
+        print(f"  {len(bad)} drift(s) between documentation and code:")
+        for b in bad:
+            print(f"    - {b}")
+        print(NL + "  A hand-written doc is a stale-able fact (invariant I2). "
+              "Fix the doc or the code, then re-run.")
+        return 1
+    print(f"  guard registry vs hooks/GUARD_SPEC.md: {len(guards.REGISTRY)} guards "
+          f"agree on id, level, and implementation status")
+    if not hdr_skipped:
+        print(f"  legacy-header table vs installed IDF: all "
+              f"{len(guards.LEGACY_HEADERS)} recommended replacements exist")
+    print(f"  extracted copies vs their specification: {fresh_n} source hash(es) "
+          f"still match")
+    return 0
+
+
 def main() -> int:
     # The digest is piped into an agent context across shells whose default
     # code page is not UTF-8. Mojibake in injected context is worse than no
@@ -1352,7 +1692,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="ESP32 Stage Kernel - layer 1")
     ap.add_argument("command",
                 choices=["detect", "cache", "check", "digest", "guard", "gate",
-                         "design", "spec-stamp", "design-review"])
+                         "design", "spec-stamp", "design-review",
+                         "rsmr", "rsmr-scorecard", "selftest"])
     ap.add_argument("-C", "--directory", default=".", help="project root")
     a = ap.parse_args()
     root = Path(a.directory).resolve()
@@ -1360,7 +1701,9 @@ def main() -> int:
             "digest": cmd_digest, "guard": cmd_guard,
             "gate": cmd_gate, "design": cmd_design,
             "spec-stamp": cmd_spec_stamp,
-            "design-review": cmd_design_review}[a.command](root)
+            "design-review": cmd_design_review,
+            "rsmr": cmd_rsmr, "rsmr-scorecard": cmd_rsmr_scorecard,
+            "selftest": cmd_selftest}[a.command](root)
 
 
 if __name__ == "__main__":

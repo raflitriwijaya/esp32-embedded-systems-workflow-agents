@@ -56,8 +56,16 @@ def c_platform_conventions(ctx):
     srcs = [p for p in srcs if guards._is_source(str(p))]
     if not srcs:
         return _r(UNVERIFIABLE, "no C/C++ sources found under the project")
+    # The cap bounds a pathological tree. It also means a VERIFIED verdict below
+    # would be claiming "no violations in N files" having read only 400 of them -
+    # a check overstating its own coverage, which is the one thing a gate verdict
+    # must never do. So the count reported is the count scanned, and truncation
+    # is disqualifying rather than cosmetic.
+    SCAN_CAP = 400
+    scanned = srcs[:SCAN_CAP]
+    truncated = len(srcs) - len(scanned)
     bad, uses_rtos = [], False
-    for p in srcs[:400]:
+    for p in scanned:
         try:
             text = p.read_text(encoding="utf-8", errors="ignore")
         except OSError:
@@ -75,9 +83,17 @@ def c_platform_conventions(ctx):
         return _r(UNVERIFIABLE,
                   "no xTaskCreate* call found - FreeRTOS use is not established "
                   "by the source alone",
-                  hints=[f"{len(srcs)} source files scanned, none create a task"])
+                  hints=[f"{len(scanned)} of {len(srcs)} source files scanned, "
+                         f"none create a task"])
+    if truncated:
+        return _r(UNVERIFIABLE,
+                  f"{len(scanned)} of {len(srcs)} source files scanned - the "
+                  f"remaining {truncated} were not read, so the absence of "
+                  f"violations across the tree is not established",
+                  hints=[f"raise SCAN_CAP in gates.py, or split the project into "
+                         f"components so each is scanned within the cap"])
     return _r(VERIFIED,
-              f"{len(srcs)} source files: no Arduino constructs, no drivers "
+              f"all {len(srcs)} source files: no Arduino constructs, no drivers "
               f"removed in ESP-IDF v6.0, FreeRTOS task creation present")
 
 
