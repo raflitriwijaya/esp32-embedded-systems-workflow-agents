@@ -35,6 +35,7 @@ try:
     import design_check
     import rsmr
     import idfconfig
+    import core_seam
 except ImportError:  # guards.py sits beside this file
     sys.path.insert(0, str(Path(__file__).resolve().parent))
 SCHEMA_VERSIONS_UNDERSTOOD = [1]
@@ -1411,10 +1412,21 @@ def _guard_context(root: Path, state):
         rs = root / "sdkconfig"
         if rs.is_file():
             syms = set(parse_sdkconfig(rs))
+    reg = ((state or {}).get("current") or {}).get("registers") or {}
+    core = reg.get("core")
+    cores = [str(core).replace("\\", "/").rstrip("/")] if core else []
+    shim = reg.get("host_shims")
+    shims = [root / str(shim)] if shim else []
     return {
         "targets": targets,
         "kconfig_symbols": syms or None,
         "idf_version": (gt.get("idf_installed") or {}).get("version"),
+        # The seam guard needs to know what counts as core. Absent a
+        # declaration it stays silent rather than guessing which directory the
+        # engineer meant - the same posture as every other unmet precondition.
+        "core_dirs": cores,
+        "host_shims": shims,
+        "root": root,
     }
 
 
@@ -1997,6 +2009,33 @@ def cmd_stop(root: Path) -> int:
     return 2
 
 
+def cmd_core(root: Path) -> int:
+    """SECTION3 sec.3.1/4.1/4.3 - the agnostic core: pure, and measured."""
+    try:
+        state, _ = load_state(root)
+    except StateError as e:
+        print(f"cannot check the core: {e}", file=sys.stderr)
+        return 2
+    bds = _build_dirs(root)
+    findings = core_seam.run(root, state, bds[0] if bds else None)
+    su = core_seam.summarise(findings)
+    stage = (state.get("current") or {}).get("stage")
+    print(f"AGNOSTIC CORE   stage {stage}")
+    print(f"  machine-checked {su['machine_checked']} | refuted "
+          f"{su['machine_refuted']} | unverifiable {su['unverifiable']}")
+    for f in findings:
+        print(NL + f"  [{f['status']}] {f['check']}")
+        print(f"     {f['why']}")
+        for e in f["evidence"][:8]:
+            print(f"     - {e}")
+        for h in f["hints"][:3]:
+            print(f"     hint: {h}")
+    print(NL + "  The seam is what makes the host build possible, and the host "
+          "build is what")
+    print("  sec.4.3 measures. Neither establishes that the core logic is right.")
+    return 0
+
+
 def cmd_design_review(root: Path) -> int:
     """SECTION2 sec.8 design review - an intra-stage review moment.
 
@@ -2315,7 +2354,7 @@ def main() -> int:
                 choices=["detect", "cache", "check", "digest", "guard", "gate",
                          "design", "spec-stamp", "design-review",
                          "rsmr", "rsmr-scorecard", "config",
-                         "post-tool-use", "stop", "selftest"])
+                         "core", "post-tool-use", "stop", "selftest"])
     ap.add_argument("-C", "--directory", default=".", help="project root")
     a = ap.parse_args()
     root = Path(a.directory).resolve()
@@ -2326,6 +2365,7 @@ def main() -> int:
             "design-review": cmd_design_review,
             "rsmr": cmd_rsmr, "rsmr-scorecard": cmd_rsmr_scorecard,
             "config": cmd_config,
+            "core": cmd_core,
             "post-tool-use": cmd_post_tool_use, "stop": cmd_stop,
             "selftest": cmd_selftest}[a.command](root)
 

@@ -20,6 +20,7 @@ warning without the friction.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 SOURCE_EXT = (".c", ".h", ".cpp", ".hpp", ".cc", ".cxx", ".ino")
 # Matched against PATH SEGMENTS, not substrings: the hook receives relative
@@ -393,6 +394,130 @@ def g_assert_ndebug(path, text, ctx):
     return out
 
 
+# ==================================================== the core / port seam
+#
+# SECTION3 sec.3.1 states the rule in the header comment of its own example:
+# the agnostic core "does not include any platform header". sec.4.1 is why it
+# matters - the core is the only thing a host compiler can test, and sec.4.3
+# measures coverage on it alone.
+#
+# ESP-IDF cannot enforce this, and that was verified rather than assumed. Every
+# component receives 13 implicit dependencies (common_component_reqs: freertos,
+# log, soc, hal, esp_system among them), so a core declaring REQUIRES nothing
+# still has esp_log.h on its include path. Proven by building it both ways:
+#
+#   ESP32 firmware, core includes esp_log.h, REQUIRES empty -> build complete
+#   host tests,     same sources                            -> C1083, no such file
+#
+# One source file, two builds, opposite answers. The host build is the only
+# mechanism that catches it - and it is the build an engineer may not run for
+# days. Hence a write-time guard.
+
+CORE_PLATFORM_INCLUDES = re.compile(
+    r'^\s*#\s*include\s*[<"]('
+    r'esp_[\w/]+\.h'
+    r'|freertos/[\w/]+\.h'
+    r'|driver/[\w/]+\.h'
+    r'|soc/[\w/]+\.h'
+    r'|hal/[\w/]+\.h'
+    r'|sdkconfig\.h'
+    r'|nvs[\w]*\.h'
+    r'|xtensa/[\w/]+\.h'
+    r')[>"]', re.M)
+
+# Called, not merely named. Comments are stripped before this runs.
+CORE_PLATFORM_API = re.compile(
+    r'\bESP_LOG[A-Z]*\s*\('
+    r'|\bESP_ERROR_CHECK\s*\('
+    r'|\besp_[a-z0-9_]+\s*\('
+    r'|\b[xv]?Task[A-Z]\w*\s*\('
+    r'|\bxQueue\w*\s*\(|\bxSemaphore\w*\s*\('
+    r'|\bpdMS_TO_TICKS\s*\('
+    r'|\bportTICK_[A-Z_]+\b'
+    r'|\b(?:TickType_t|SemaphoreHandle_t|QueueHandle_t|TaskHandle_t)\b')
+
+CORE_CONFIG_SYMBOL = re.compile(r'\bCONFIG_[A-Z0-9_]{2,}\b')
+
+# sec.3.1 says the core is "compiled identically" for every target. A platform
+# conditional means it is not.
+CORE_PLATFORM_IFDEF = re.compile(
+    r'^\s*#\s*(?:if|ifdef|ifndef|elif)\b[^\n]*'
+    r'\b(?:ESP_PLATFORM|IDF_VER|ESP_IDF_VERSION|__XTENSA__|CONFIG_IDF_TARGET)\b',
+    re.M)
+
+
+def _shim_exists(ctx, header):
+    """True when the host build supplies its own copy of this header.
+
+    sec.4.2 puts ports/host/inc on the core's include path "for host shims for
+    FreeRTOS types". A core including a header the host shims still compiles
+    both ways, so that is a weaker finding than one that breaks the host build.
+    """
+    for d in (ctx.get("host_shims") or []):
+        try:
+            if (Path(d) / header).is_file():
+                return True
+        except (OSError, ValueError):
+            continue
+    return False
+
+
+def g_core_purity(path, text, ctx):
+    """Platform coupling inside the agnostic core."""
+    roots = ctx.get("core_dirs") or []
+    if not roots:
+        return []                       # nothing declared as core - say nothing
+    p = path.replace("\\", "/")
+    if not any(p == r or p.startswith(r.rstrip("/") + "/") for r in roots):
+        return []
+    out = []
+    for m in CORE_PLATFORM_INCLUDES.finditer(text):
+        header = m.group(1)
+        shimmed = _shim_exists(ctx, header)
+        out.append(_f("core-purity",
+                      f"{header} is a platform header, and this file is in the "
+                      f"agnostic core. SECTION3 sec.3.1: the core includes no "
+                      f"platform header, because sec.4.2 compiles these same "
+                      f"sources on the host where that header does not exist."
+                      + (f" A host shim for it exists, so the host build would "
+                         f"still compile - but the core is no longer portable "
+                         f"by its own definition."
+                         if shimmed else
+                         f" The host test build will fail to compile, and with "
+                         f"it the sec.4.3 coverage bar becomes unmeasurable."),
+                      "SECTION3 sec.3.1; sec.4.1",
+                      _lineno(text, m.start())))
+    code = _strip_line_comments(text)
+    seen = set()
+    for m in CORE_PLATFORM_API.finditer(code):
+        tok = m.group(0).rstrip("( ").strip()
+        if tok in seen:
+            continue
+        seen.add(tok)
+        out.append(_f("core-purity",
+                      f"{tok} is a platform API. The agnostic core is compiled "
+                      f"for the host as well as the target (sec.4.2), and there "
+                      f"is no FreeRTOS or ESP-IDF there.",
+                      "SECTION3 sec.3.1", _lineno(code, m.start())))
+    for m in CORE_CONFIG_SYMBOL.finditer(code):
+        sym = m.group(0)
+        if sym in seen:
+            continue
+        seen.add(sym)
+        out.append(_f("core-purity",
+                      f"{sym} comes from sdkconfig.h, which the host build does "
+                      f"not generate. A Kconfig symbol in the core makes its "
+                      f"behaviour depend on a platform configuration.",
+                      "SECTION3 sec.3.1", _lineno(code, m.start())))
+    for m in CORE_PLATFORM_IFDEF.finditer(text):
+        out.append(_f("core-purity",
+                      "a platform conditional. sec.3.1 requires the core to be "
+                      "\"compiled identically\" for every target - code behind "
+                      "an ESP_PLATFORM or IDF_VER test is not.",
+                      "SECTION3 sec.3.1", _lineno(text, m.start())))
+    return out
+
+
 def g_arduino(path, text, ctx):
     """Redundant with the compiler, but SECTION3 sec.3.3 mandates the check."""
     out = []
@@ -634,6 +759,7 @@ REGISTRY = [
     ("arduino-ban",   "guard",    _is_source,    g_arduino,        True),
     ("idf-version-pin", "guard",  _is_cmake,     g_idf_version_pin, True),
     ("assert-ndebug",  "guard",    _is_source,    g_assert_ndebug,  True),
+    ("core-purity",   "guard",    _is_source,    g_core_purity,    True),
     # Hole 4 (verified): at "strict" this guard denies only at S4-S5, while
     # the design phase runs at S1-S3 - so it could never deny during the
     # work it exists to protect. At "guard" it warns at S1 and denies at
@@ -680,7 +806,17 @@ def _pc_core_pin(ctx):
     return None
 
 
-PRECONDITIONS = {"kconfig-exists": _pc_kconfig, "core-pin": _pc_core_pin}
+def _pc_core_purity(ctx):
+    if not ctx.get("core_dirs"):
+        return ("dormant",
+                "current.registers.core is not set, so nothing is declared as "
+                "the agnostic core and there is no seam to keep. Point it at "
+                "the directory whose sources the host test build compiles")
+    return None
+
+
+PRECONDITIONS = {"kconfig-exists": _pc_kconfig, "core-pin": _pc_core_pin,
+                 "core-purity": _pc_core_purity}
 
 
 def precondition(gid, ctx):

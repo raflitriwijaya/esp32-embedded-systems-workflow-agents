@@ -20,6 +20,7 @@ The directory structure mirrors the install target, so installation is a copy or
 | `quality-attributes.yaml` | — (data, extracted) | Twelve-attribute vocabulary and the 44-edge conflict graph |
 | `kconfig-migration.yaml` | — (data, extracted) | 721 ESP-IDF symbol renames and 4174 valid symbols, cut from the installed tree |
 | `rsmr-matrix.yaml` | — (data, extracted) | SECTION 5 §7.1 matrix, 40 criteria × 5 stages, plus the debt ceiling |
+| `CORE_SEAM_SPEC.md` | — (reference only) | The core/port seam, host testability, and the §4.3 coverage bar |
 | `RSMR_SPEC.md` | — (reference only) | Stage obligations, deferral validity, and the §7 Totals defect |
 | `GATE_SPEC.md` | — (reference only) | Gate verdicts, the adversary, and the dossier |
 | `CLOSURE_SPEC.md` | — (reference only) | Claim closure, observation sources, the `KERNEL_OBS` convention |
@@ -140,6 +141,7 @@ This table records the *current* baseline for the framework's own calibration. P
 | 6 | Framework self-test - `stage_kernel.py selftest`: guard registry vs `GUARD_SPEC.md`, legacy-header table vs the installed IDF, extracted copies vs their specification | Done |
 | 7 | Section 3 migration + config bar - `tools/extract_kconfig.py`, `tools/idfconfig.py`, `idf-version-pin` and `assert-ndebug` guards | Done |
 | 8 | The compile loop - `hooks/COMPILE_LOOP_SPEC.md`, `hooks/post_tool_use_build.ps1`, `hooks/stop_build_claim.ps1` | Done |
+| 9 | Core seam + coverage - `CORE_SEAM_SPEC.md`, `tools/core_seam.py`, `core-purity` guard | Done |
 
 **This is the whole agent.** Phases 0-4 implement human-in-the-loop support for SECTION 1: stage awareness, anti-hallucination guards, gate readiness with an adversary, and a decision boundary the agent cannot cross.
 
@@ -301,6 +303,33 @@ The claim matcher was tuned against 28 worked cases and sits at zero errors. Two
 **The documented `Stop` contract carries no loop protection and no `stop_hook_active` field**, so the limits are load-bearing rather than cautious: never twice in a row, never more than three times a session, `STAGE_KERNEL_NO_STOP=1` disables it, and any error at all fails open. The hold offers two ways out, and the second is not a loophole — saying *the build state is unverified* is a true statement, and this framework prefers it to a false one.
 
 `hooks/COMPILE_LOOP_SPEC.md` carries the matcher table and the registration.
+
+### The agnostic core — seam and coverage
+
+SECTION 3 §3.1 requires the core to include no platform header; §4.1 says the core is the only thing a host compiler can test; §4.3 measures coverage on it alone. Break the seam and the **firmware keeps building** — what stops is the host build, and with it the coverage bar.
+
+Whether ESP-IDF enforces this was verified, not assumed. `esp_log.h` inside `components/core/` with `REQUIRES` empty:
+
+| Build | Result |
+|---|---|
+| ESP32 firmware | `Project build complete` |
+| Host tests, same source file | `fatal error C1083: Cannot open include file: 'esp_log.h'` |
+
+ESP-IDF grants every component **13 implicit dependencies** (`freertos`, `log`, `soc`, `hal` among them), so `REQUIRES: []` proves nothing — a check built on the dependency graph alone would report a false clean. That graph is still read, for a narrower question: coupling declared *deliberately*, which is the §2.2 `REQUIRES driver` trap.
+
+`core-purity` is a **guard**, not only a check, because the build that catches a violation is the build an engineer may not run for days.
+
+**Coverage.** §4.3 names gcov/lcov; neither works with MSVC and this workstation has no GCC. `Microsoft.CodeCoverage.Console.exe` produces cobertura XML with per-file `line-rate` and `branch-rate` — the two figures §4.3 asks for. Recorded as a deviation rather than substituted silently, and its CI availability is unverified.
+
+One trap arrived by accident and justifies the check existing at all. A failed host build produced:
+
+```xml
+<coverage line-rate="1" branch-rate="1"><packages /></coverage>
+```
+
+**100% over zero files.** Anything reading the root attribute reports the bar met. The check refuses: *a report over zero lines is not 100%* — the same vacuous-truth defect as an empty assumption log reading as no ambiguities.
+
+`CORE_SEAM_SPEC.md` carries the bars, the binding rule and the declaration.
 
 ### Self-test — the framework checked against itself
 

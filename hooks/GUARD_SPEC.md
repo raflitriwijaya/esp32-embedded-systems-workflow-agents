@@ -55,6 +55,7 @@ A denial is overridable through the normal permission flow. The reason text says
 | `arduino-ban` | guard | C/C++ sources | ✅ |
 | `idf-version-pin` | guard | `CMakeLists.txt`, `*.cmake` | ✅ |
 | `assert-ndebug` | guard | C/C++ sources | ✅ |
+| `core-purity` | guard | C/C++ sources under `registers.core` | ✅ |
 | `numeric-claim` | guard | markdown under `design/`, `hardware/`, `reliability/`, `tracking/pic-audit/dossiers/` | ✅ |
 | `evidence-path` | strict | — | ❌ not built |
 
@@ -76,6 +77,7 @@ Each guard therefore declares what it needs, and the digest reports two kinds of
 | guard | needs | without it |
 |---|---|---|
 | `kconfig-exists` | a symbol table from any `sdkconfig` | **dormant** — every `CONFIG_` name passes unexamined |
+| `core-purity` | `current.registers.core` | **dormant** — nothing is declared as the agnostic core, so there is no seam to keep |
 | `core-pin` | a configured target in the cache | **partial** — the `CONFIG_FREERTOS_UNICORE` branch cannot fire, so pinning to core 1 on a single-core target passes here and fails on the device. The *core 2 does not exist* branch is unaffected |
 
 `legacy-driver` reads `idf_version` but does not depend on it: without one it omits the *deprecated rather than removed* annotation and still fires.
