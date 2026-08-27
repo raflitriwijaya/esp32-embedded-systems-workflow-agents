@@ -1348,6 +1348,8 @@ def cmd_design(root: Path) -> int:
         print(f"     {f['why']}")
         for e in f["evidence"][:6]:
             print(f"     evidence: {e}")
+        for h in f.get("hints") or []:
+            print(f"     hint: {h}")
     print(NL + "  These establish SHAPE only. A well-formed requirement can "
           "still be the wrong requirement.")
     return 0

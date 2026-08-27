@@ -86,12 +86,13 @@ Run `python tools/stage_kernel.py design -C .`:
 | `attribute-measurable` | Every requirement names at least one attribute, and flags those resting only on attributes nothing can measure |
 | `attribute-conflicts` | The declared trade-offs this requirement set has bought into, quoted from the reference |
 | `target-binds-criterion` | Targets cite real SECTION 5 criteria; a fabricated criterion id is caught on any row |
+| `conflict-disposition` | Every trade-off carries a decision record naming both attributes |
 
 None of them establishes that a target is **correct**. That boundary does not move.
 
 ---
 
-## Conflicts are not defects
+## Conflicts are not defects — but they are questions
 
 `attribute-conflicts` reports `MACHINE_CHECKED` even when it finds conflicts, because a
 conflict is a cost already accepted rather than a fault. A project claiming both
@@ -102,3 +103,43 @@ conflict is a cost already accepted rather than a fault. A project claiming both
 
 Knowing that while the design can still change is the point. Discovering it at a
 72-hour run is not.
+
+Reporting it forever is not the point either. `conflict-disposition` asks for the
+answer: an `AD-S<n>-<NNN>` decision record naming **both** attributes, under
+`current.registers.decisions`. Nothing new to learn — it is the same five-field
+record SECTION 2 §3.1 already defines, and `decision-records` already checks.
+
+```markdown
+# AD-S2-001 - bounded retry policy
+
+Decision: Robust wins over Deterministic; I2C retries are capped at 3 with a
+fixed 5 ms backoff so the worst-case path stays bounded.
+Driven by: REQ-S2-001, REQ-S2-002
+Technical reason: [timing constraint] an unbounded retry loop makes worst-case
+response time data-dependent, which Deterministic forbids. Capping at 3 keeps
+the fault branch while holding WCET at 515 ms.
+Alternatives considered: unbounded retry (rejected: unbounded WCET); no retry
+(rejected: single bus glitch drops the sample).
+Stage impact: S2
+```
+
+Once recorded, the gate sees the decision rather than the conflict:
+
+```
+Deterministic vs Robust -> AD-S2-001-retry-bound: Robust wins over
+Deterministic; I2C retries are capped at 3 with a fixed 5 ms backoff
+```
+
+Two things worth knowing before you write one:
+
+**Name both attributes where you argue, not only where you reject.** A record
+naming both only inside *Alternatives considered* is reported as a **weak**
+disposition. An AD about CRC that mentions `Reliable` and `Resource Efficient`
+in a rejected option is not a decision about that trade-off, and the check
+declines to pretend it is.
+
+**At S1 this is surfaced, not demanded.** A Prototype is where trade-offs are
+still being found. From S2 an undisposed conflict is `MACHINE_REFUTED`.
+
+The check establishes that a decision exists and names the pair. Whether the
+decision is *right* is yours, and stays yours.

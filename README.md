@@ -175,11 +175,25 @@ An optional **Attribute** column closes that. `quality-attributes.yaml` is **ext
 | `attribute-vocabulary` | Names come from the closed twelve |
 | `attribute-measurable` | Flags requirements resting only on attributes nothing can measure |
 | `attribute-conflicts` | The trade-offs this requirement set has bought into, quoted from the reference |
+| `conflict-disposition` | Every trade-off carries an `AD-S<n>-<NNN>` naming both attributes — the decision, not just the conflict |
 | `target-binds-criterion` | Targets cite real SECTION 5 criteria; a fabricated id is caught on any row |
 
 **Eight of the twelve have no measurable criteria anywhere.** Safety, Deterministic, Portable, Observable, Testable, Upgradeable, Secure and Resource Efficient carry definitions and patterns but no pass condition, so a requirement resting only on them is unverifiable by construction. Reporting that count is the same move as the 18-of-44 in the §8 review: naming what cannot be established is the product.
 
 Conflicts report as `MACHINE_CHECKED`, not as failures. A project claiming both `Robust` and `Deterministic` is told *"defensive branches and retries widen WCET and add data-dependent execution paths"* — a cost already accepted, surfaced while the design can still change.
+
+**Surfacing a trade-off is not the same as settling one.** `attribute-conflicts` reported the same conflicts every session, unchanged, forever: nothing separated a trade-off the engineer had weighed and settled from one they had never seen, and at a gate the reviewer was handed conflicts without decisions when it is the decisions that deserve review.
+
+`conflict-disposition` closes that. A disposition is an `AD-S<n>-<NNN>` record naming both attributes — reusing the decision-record mechanism SECTION 2 §3.1 already defines and `decision-records` already validates, rather than inventing a second home for the same kind of fact (invariant I5). The check then quotes the decision back:
+
+```
+Deterministic vs Robust -> AD-S2-001-retry-bound: Robust wins over
+Deterministic; I2C retries are capped at 3 with a fixed 5 ms backoff
+```
+
+A record that names both attributes only in *Alternatives considered* is reported as a **weak** disposition rather than accepted silently — an AD about CRC that happens to mention `Reliable` and `Resource Efficient` in a rejected option is not a decision about that trade-off, and a plain substring match would have swallowed it.
+
+Stage-scaled: at S1 an undisposed conflict is surfaced, not demanded, because a Prototype is where trade-offs are still being discovered. From S2 it is `MACHINE_REFUTED`. What this establishes is that a decision exists and names the pair — never that the decision resolves the conflict.
 
 The column is a **local convention**; SECTION 2 §2.1 does not mandate it. Without it the attribute checks report `UNVERIFIABLE` rather than failing. `templates/REQ-register.template.md` is the ready-to-copy table.
 

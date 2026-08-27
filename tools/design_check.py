@@ -49,9 +49,9 @@ REFUTED = "MACHINE_REFUTED"
 SKIPPED = "UNVERIFIABLE"
 
 
-def _f(check, status, why, evidence=None):
+def _f(check, status, why, evidence=None, hints=None):
     return {"check": check, "status": status, "why": why,
-            "evidence": evidence or []}
+            "evidence": evidence or [], "hints": hints or []}
 
 
 # ============================================================ table parsing
@@ -457,7 +457,9 @@ def c_attribute_conflicts(root, state, reg):
         return _f("attribute-conflicts", VERIFIED,
                   f"{len(found)} declared trade-off(s) between attributes this "
                   f"project demands - each is a cost already accepted, not a defect",
-                  found[:6])
+                  found[:6],
+                  ["conflict-disposition reports which of these have a decision "
+                   "record; this check only finds them"])
     return _f("attribute-conflicts", VERIFIED,
               f"{len(claimed)} attribute(s) claimed, no declared conflict between them")
 
@@ -499,11 +501,150 @@ def c_target_binds_criterion(root, state, reg):
               "every target for a measurable attribute cites a real SECTION5 criterion")
 
 
+def _claimed_conflicts(root, state, reg):
+    """[(a, b, why)] - declared conflicts between attributes this project claims.
+
+    Shared with c_attribute_conflicts so the two checks can never disagree about
+    what the requirement set has bought into.
+    """
+    spec = load_attributes()
+    if not spec:
+        return None, f"{ATTR_FILE} absent"
+    rows, has_col = _attr_cells(root, reg)
+    if rows is None or not has_col:
+        return None, "no Attribute column to read"
+    claimed = {n for _, _, names, _ in rows for n in names}
+    edges = {a["name"]: {c["target"]: c["why"]
+                         for c in (a.get("conflicts_with") or [])}
+             for a in spec["attributes"]}
+    found, seen = [], set()
+    for a in sorted(claimed):
+        for b, why in (edges.get(a) or {}).items():
+            if b in claimed and (b, a) not in seen:
+                seen.add((a, b))
+                found.append((a, b, why))
+    return found, None
+
+
+def _ad_records(root, reg):
+    """[{id, path, text, decision, reason}] from the decision register."""
+    pth = reg.get("decisions")
+    if not pth:
+        return None, "registers.decisions not set - there is nowhere to record a "\
+                     "disposition"
+    d = root / str(pth)
+    if not d.is_dir():
+        return None, f"{pth} is not a directory"
+    out = []
+    for fp in sorted(d.glob("*.md")):
+        text = fp.read_text(encoding="utf-8", errors="ignore")
+
+        def field(name):
+            m = re.search(rf"^\s*{name}:\s*(.+?)\s*$", text, re.M)
+            return m.group(1).strip() if m else ""
+
+        out.append({"id": fp.stem.split("-")[0:3],
+                    "name": fp.stem,
+                    "path": fp.relative_to(root).as_posix(),
+                    "text": text,
+                    "decision": field("Decision"),
+                    "reason": field("Technical reason")})
+    return out, None
+
+
+def _names_in(text, name):
+    return re.search(rf"\b{re.escape(name)}\b", text, re.I) is not None
+
+
+def c_conflict_disposition(root, state, reg):
+    """A surfaced trade-off with no recorded decision is a question nobody answered.
+
+    c_attribute_conflicts reports the conflicts this requirement set buys into,
+    and reports them again every session, unchanged, forever. Nothing separates a
+    trade-off the engineer weighed and settled from one they have never seen -
+    and at a gate the reviewer is handed the conflicts without the decisions,
+    when it is the decisions that deserve review.
+
+    A disposition is an AD-S<n>-<NNN> record naming both attributes. That reuses
+    the decision-record mechanism SECTION2 sec.3.1 already defines and
+    c_decision_records already validates, rather than inventing a second place
+    for the same kind of fact (invariant I5).
+
+    Stage-scaled, because demanding a formal decision record for every trade-off
+    at Prototype would contradict the enforcement ladder's own advisory posture
+    at S1. From S2 an undisposed conflict is refuted.
+    """
+    conflicts, why = _claimed_conflicts(root, state, reg)
+    if conflicts is None:
+        return _f("conflict-disposition", SKIPPED, why)
+    if not conflicts:
+        return _f("conflict-disposition", VERIFIED,
+                  "no declared conflict between the attributes this project "
+                  "claims - nothing to dispose")
+
+    ads, ad_why = _ad_records(root, reg)
+    stage = ((state or {}).get("current") or {}).get("stage")
+
+    if ads is None:
+        return _f("conflict-disposition", SKIPPED,
+                  f"{len(conflicts)} conflict(s) to dispose, but {ad_why}",
+                  [f"{a} vs {b}" for a, b, _ in conflicts[:6]])
+
+    disposed, weak, undisposed = [], [], []
+    for a, b, cwhy in conflicts:
+        hits = [ad for ad in ads
+                if _names_in(ad["text"], a) and _names_in(ad["text"], b)]
+        if not hits:
+            undisposed.append(f"{a} vs {b}: no decision record names both - "
+                              f"{cwhy[:90]}")
+            continue
+        ad = hits[0]
+        argued = any(_names_in(ad["decision"] + " " + ad["reason"], n)
+                     for n in (a, b))
+        line = (f"{a} vs {b} -> {ad['name']}: "
+                f"{(ad['decision'] or '(no Decision: line)')[:100]}")
+        if argued:
+            disposed.append(line)
+        else:
+            weak.append(f"{line}   [names both only outside Decision: and "
+                        f"Technical reason: - check it is really about this "
+                        f"trade-off]")
+
+    n_ok = len(disposed) + len(weak)
+    if undisposed and stage != "S1":
+        return _f("conflict-disposition", REFUTED,
+                  f"{len(undisposed)} of {len(conflicts)} declared trade-off(s) "
+                  f"have no decision record naming both attributes - surfaced "
+                  f"every session, answered in none",
+                  undisposed[:8] + weak[:2],
+                  [f"record one as AD-S<n>-<NNN>-<slug>.md under "
+                   f"{reg.get('decisions')}, naming both attributes in "
+                   f"Decision: or Technical reason:",
+                   "this establishes that a decision exists and names the pair - "
+                   "never that the decision resolves the conflict"])
+    if undisposed:
+        return _f("conflict-disposition", VERIFIED,
+                  f"{len(undisposed)} of {len(conflicts)} trade-off(s) are not yet "
+                  f"disposed. At S1 that is surfaced, not demanded - a Prototype "
+                  f"is where trade-offs are still being discovered",
+                  undisposed[:6] + disposed[:3],
+                  ["from S2 an undisposed conflict is refuted"])
+    return _f("conflict-disposition", VERIFIED,
+              f"all {len(conflicts)} declared trade-off(s) carry a decision record "
+              f"naming both attributes"
+              + (f", {len(weak)} of them only outside the argued fields" if weak
+                 else ""),
+              disposed[:6] + weak[:3],
+              ["a record exists and names the pair; whether it resolves the "
+               "conflict is the engineer's judgement and stays that way"])
+
+
 CHECKS = [c_registers_present, c_req_table_shape, c_decision_records,
           c_req_references_resolve, c_orphan_requirements,
           c_assumption_references,
           c_attribute_vocabulary, c_attribute_measurable,
-          c_attribute_conflicts, c_target_binds_criterion]
+          c_attribute_conflicts, c_target_binds_criterion,
+          c_conflict_disposition]
 
 
 def run(root: Path, state):
