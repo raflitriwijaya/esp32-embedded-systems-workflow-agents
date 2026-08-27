@@ -233,6 +233,63 @@ def g_legacy_driver(path, text, ctx):
     return out
 
 
+RE_IDF_VER_USE = re.compile(r"\bIDF_VERSION_(?:MAJOR|MINOR|PATCH)\b")
+RE_VERSION_CMAKE = re.compile(
+    r"include\s*\(\s*\$\{?ENV\{IDF_PATH\}\}?\s*/tools/cmake/version\.cmake",
+    re.I)
+RE_PIN_MAJOR = re.compile(r"set\s*\(\s*\w*REQUIRED_MAJOR\s+(\d+)", re.I)
+RE_PIN_MINOR = re.compile(r"set\s*\(\s*\w*REQUIRED_MINOR\s+(\d+)", re.I)
+
+
+def g_idf_version_pin(path, text, ctx):
+    """A version guard pinned to the wrong version fails on the right toolchain.
+
+    SECTION3 sec.6.2 supplies a CMake sample that pins v5.3 inside a document
+    whose every other line pins v6.0.2, immediately below a table stating
+    "Pinning is non-negotiable". Copying it produces a build that fails on the
+    correct toolchain and passes only on the wrong one.
+
+    The same sample places the check before project.cmake is included, where
+    IDF_VERSION_MAJOR is not in scope - across the whole of tools/cmake it is
+    set only in version.cmake, which the app's CMakeLists never includes. Run
+    with real CMake the sample reports "Detected: v." and fails regardless of
+    what is installed.
+    """
+    out = []
+    uses = RE_IDF_VER_USE.search(text)
+    if uses and not RE_VERSION_CMAKE.search(text):
+        out.append(_f("idf-version-pin",
+                      "IDF_VERSION_MAJOR/MINOR is read without including "
+                      "version.cmake first. Across the installed tools/cmake "
+                      "tree it is set only in version.cmake, which the app "
+                      "CMakeLists never includes - so it is empty here and the "
+                      "comparison fails whatever is installed, reporting "
+                      "'Detected: v.'. Add "
+                      "include($ENV{IDF_PATH}/tools/cmake/version.cmake) above "
+                      "the check.",
+                      "SECTION3 sec.6.2",
+                      _lineno(text, uses.start())))
+
+    installed = str(ctx.get("idf_version") or "")
+    parts = installed.split(".")
+    have = (parts[0], parts[1]) if len(parts) >= 2 else None
+    for rx, which, idx in ((RE_PIN_MAJOR, "major", 0), (RE_PIN_MINOR, "minor", 1)):
+        m = rx.search(text)
+        if not m or not have:
+            continue
+        if m.group(1) != have[idx]:
+            out.append(_f("idf-version-pin",
+                          f"the pinned IDF {which} version is {m.group(1)}, but "
+                          f"the installed toolchain is v{installed}. A pin that "
+                          f"does not match the toolchain it guards fails on the "
+                          f"correct install and passes only on the wrong one. "
+                          f"SECTION3 sec.6.2 calls a pin disagreeing with the "
+                          f"installed version a gate finding in its own right.",
+                          "SECTION3 sec.6.2",
+                          _lineno(text, m.start())))
+    return out
+
+
 def g_arduino(path, text, ctx):
     """Redundant with the compiler, but SECTION3 sec.3.3 mandates the check."""
     out = []
@@ -429,6 +486,15 @@ def is_firmware_source(path):
     return not NONFIRMWARE_FILE.search(segs[-1].lower())
 
 
+def _is_cmake(path):
+    p = path.replace("\\", "/")
+    segs = p.split("/")
+    if SKIP_SEGMENTS.intersection(segs) or any(
+            s.startswith(SKIP_PREFIXES) for s in segs):
+        return False
+    return segs[-1] == "CMakeLists.txt" or p.lower().endswith(".cmake")
+
+
 def _is_claim_doc(path):
     """Documents that feed gate criteria. Deliberately excludes tests/reports/,
     which holds the evidence itself, and this framework's own specs."""
@@ -455,6 +521,7 @@ REGISTRY = [
     ("warn-suppress", "guard",    _is_sdkconfig, g_warn_suppress,  True),
     ("legacy-driver", "guard",    _is_source,    g_legacy_driver,  True),
     ("arduino-ban",   "guard",    _is_source,    g_arduino,        True),
+    ("idf-version-pin", "guard",  _is_cmake,     g_idf_version_pin, True),
     # Hole 4 (verified): at "strict" this guard denies only at S4-S5, while
     # the design phase runs at S1-S3 - so it could never deny during the
     # work it exists to protect. At "guard" it warns at S1 and denies at

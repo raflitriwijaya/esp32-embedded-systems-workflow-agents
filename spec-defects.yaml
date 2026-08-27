@@ -26,6 +26,8 @@
 
 source: workflow-iot/WORKFLOW_SECTION2.md
 sources:            # further specification files this register covers
+  - path: workflow-iot/WORKFLOW_SECTION3.md
+    sha256: d0ec7e10d93bfd7a90a33a04bff02cf4f5a7b00f6d195c0bd455e257e5cf5d8f
   - path: workflow-iot/WORKFLOW_SECTION5.md
     sha256: 79619c2a50410e17ee1f0499880277a2ff9121b2a444183f5a209a710017f9d3
 verified_on: 2026-08-26
@@ -232,6 +234,93 @@ defects:
       Handled by generating the scorecard from the matrix rather than mapping
       across the mismatch - `stage_kernel.py rsmr-scorecard`. The sec.6.2 header
       fields are kept, so the artifact is still the one sec.6.3 governs.
+
+  # --- SECTION3: traps verified against the installed ESP-IDF v6.0.2 tree ----
+
+  - id: idf-version-pin-v53
+    source: workflow-iot/WORKFLOW_SECTION3.md
+    lines: [2009, 2010]
+    class: trap
+    digest: true
+    says: >-
+      set(ESP_IDF_REQUIRED_MAJOR 5) / set(ESP_IDF_REQUIRED_MINOR 3) in the
+      sec.6.2 "ESP-IDF version pinning in CMakeLists.txt" sample
+    correct: >-
+      The document pins v6.0.2 throughout and the table directly above this
+      sample states "Pinning is non-negotiable". The sample pins v5.3. Copying
+      it produces a build that FAILS on the correct toolchain and passes only
+      on the wrong one - the safety mechanism installed backwards.
+
+      Verified: tools/cmake/version.cmake in the installed tree reads
+      set(IDF_VERSION_MAJOR 6) / set(IDF_VERSION_MINOR 0).
+
+      Second defect in the same sample, and the worse of the two. The check runs
+      BEFORE include($ENV{IDF_PATH}/tools/cmake/project.cmake), and
+      IDF_VERSION_MAJOR is never in scope there. Across the whole of
+      tools/cmake it is set in exactly one file, version.cmake, which is
+      included only by scripts/component_get_requirements.cmake - a separate
+      cmake script run, not the app's scope. Executed with real CMake 4.0.3 the
+      sample prints "ESP-IDF v5.3 required. Detected: v." - an empty version.
+
+      The correct form includes version.cmake explicitly, and was verified to
+      read v6.0.2, accept a v6.0 pin and reject a v5.3 one:
+
+        include($ENV{IDF_PATH}/tools/cmake/version.cmake)
+        set(ESP_IDF_REQUIRED_MAJOR 6)
+        set(ESP_IDF_REQUIRED_MINOR 0)
+        if(NOT (IDF_VERSION_MAJOR EQUAL ESP_IDF_REQUIRED_MAJOR
+                AND IDF_VERSION_MINOR EQUAL ESP_IDF_REQUIRED_MINOR))
+            message(FATAL_ERROR "...")
+        endif()
+        include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+
+  - id: stack-words-s3
+    source: workflow-iot/WORKFLOW_SECTION3.md
+    lines: [206, 285, 330, 340, 350, 2111]
+    class: trap
+    digest: true
+    says: >-
+      "stack depth (words)" on three xTaskCreatePinnedToCore calls, plus
+      "stack size (words)" in the sec.2.1 prose, sec.2.2 step 6 and the sec.7
+      checklist
+    correct: >-
+      ESP-IDF takes BYTES, per components/freertos/FreeRTOS-Kernel/include/
+      freertos/task.h:315 in the installed tree - "the NUMBER OF BYTES. Note
+      that this differs from vanilla FreeRTOS."
+
+      More convincing here than in SECTION2 because the arithmetic is
+      internally consistent: "3072, // stack depth (words) - measured 2048 peak
+      + 50% margin" is correct as a words calculation. An engineer who checks
+      the maths finds it right and is still wrong by a factor of four.
+
+  - id: core-requires-driver
+    source: workflow-iot/WORKFLOW_SECTION3.md
+    lines: [282]
+    class: trap
+    digest: true
+    says: >-
+      core/CMakeLists.txt declaring REQUIRES driver, with the comment
+      "for sensor types enum - no platform dependency"
+    correct: >-
+      The comment refutes itself. `driver` is an ESP-IDF platform component;
+      the installed tree exposes driver/i2c.h, driver/twai.h and
+      driver/touch_pad.h from components/driver. A core/ that REQUIRES it
+      cannot compile for the host, which is what sec.4.2 requires from Stage 2
+      and what sec.4.3 measures coverage on. The seam sec.2.0 and sec.3.1 exist
+      to establish is broken inside the sample that teaches it.
+
+  - id: sw-coexist-s3
+    source: workflow-iot/WORKFLOW_SECTION3.md
+    lines: [255, 381, 951]
+    class: trap
+    digest: false
+    says: CONFIG_SW_COEXIST_ENABLE
+    correct: >-
+      The symbol in ESP-IDF v6.0.2 is CONFIG_ESP_COEX_SW_COEXIST_ENABLE, read
+      from components/esp_coex/Kconfig in the installed tree. A CONFIG_ symbol
+      that does not exist evaluates false, so coexistence is silently never
+      enabled. Same defect as the SECTION2 entry; recorded separately because
+      the kconfig-exists guard cites line numbers per file.
 
 # Investigated and found NOT to be defects. Recorded so they are not re-raised.
 rejected:

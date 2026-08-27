@@ -53,6 +53,7 @@ A denial is overridable through the normal permission flow. The reason text says
 | `warn-suppress` | guard | `sdkconfig*` | ✅ |
 | `legacy-driver` | guard | C/C++ sources | ✅ |
 | `arduino-ban` | guard | C/C++ sources | ✅ |
+| `idf-version-pin` | guard | `CMakeLists.txt`, `*.cmake` | ✅ |
 | `numeric-claim` | guard | markdown under `design/`, `hardware/`, `reliability/`, `tracking/pic-audit/dossiers/` | ✅ |
 | `evidence-path` | strict | — | ❌ not built |
 
@@ -106,6 +107,35 @@ Fires on `sdkconfig*` files containing `CONFIG_COMPILER_DISABLE_DEFAULT_ERRORS=y
 
 ### `legacy-driver`
 The nine headers removed in ESP-IDF v6.0, each mapped to its replacement, plus `driver/i2c.h` (EOL, removal in v7.0) and a few unmistakable legacy call names. When the installed IDF is a 5.x release the message says *deprecated rather than removed — it will break on upgrade*, because the installed version is read from ground truth rather than assumed.
+
+### `idf-version-pin`
+- `IDF_VERSION_MAJOR`/`MINOR` read without `include($ENV{IDF_PATH}/tools/cmake/version.cmake)` above it
+- A pinned major or minor that disagrees with the installed toolchain
+
+Applies to `CMakeLists.txt` and `*.cmake`. Cites SECTION 3 §6.2.
+
+Both halves come from one sample — §6.2's *"ESP-IDF version pinning in CMakeLists.txt"*, which pins **v5.3** inside a document that pins v6.0.2 everywhere else, immediately below a table reading *"Pinning is non-negotiable"*.
+
+The second half is the worse one and is easy to miss. The sample places its check above `include(.../project.cmake)`, and `IDF_VERSION_MAJOR` is not in scope there. Across the whole of `tools/cmake` in the installed v6.0.2 tree it is set in exactly one file, `version.cmake`, which is included only by `scripts/component_get_requirements.cmake` — a separate cmake script run, never the app's own scope. Executed under real CMake 4.0.3 the sample prints:
+
+```
+ESP-IDF v5.3 required. Detected: v.
+```
+
+An empty version. The guard that was supposed to protect the toolchain fails on every toolchain, including the correct one.
+
+The form that works — verified to read v6.0.2, accept a v6.0 pin and reject a v5.3 one:
+
+```cmake
+include($ENV{IDF_PATH}/tools/cmake/version.cmake)
+set(ESP_IDF_REQUIRED_MAJOR 6)
+set(ESP_IDF_REQUIRED_MINOR 0)
+if(NOT (IDF_VERSION_MAJOR EQUAL ESP_IDF_REQUIRED_MAJOR
+        AND IDF_VERSION_MINOR EQUAL ESP_IDF_REQUIRED_MINOR))
+    message(FATAL_ERROR "...")
+endif()
+include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+```
 
 ### `numeric-claim`
 

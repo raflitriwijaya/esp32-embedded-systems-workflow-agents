@@ -476,28 +476,112 @@ RE_COMPILED = re.compile(r"Building (?:C|CXX|ASM) object|\bCompiling\b", re.M)
 RE_NO_WORK = re.compile(r"ninja: no work to do", re.I)
 
 
-def _newest_build_input(root: Path):
-    """(mtime, relative path) of the most recently touched build input."""
-    newest = None
-    for p in root.rglob("*"):
-        if not p.is_file():
+def _compiled_inputs(root: Path, build_dir: Path):
+    """What the build system says it compiled, restricted to this project.
+
+    CMake writes compile_commands.json into the build directory, and ESP-IDF
+    ships it. Asking it is strictly better than inferring build inputs from file
+    extensions: a host-compiled unit test under tests/ is a .c file and is not a
+    firmware build input, and the sweep counted it. SECTION3 sec.4 requires those
+    tests from Stage 2, so every test written knocked the zero-warning gate to
+    UNVERIFIABLE - which teaches the engineer to ignore the staleness signal.
+
+    Returns None when the list is unavailable, so the caller can fall back and
+    say which method it used.
+    """
+    if not build_dir:
+        return None, "no build directory"
+    cc = build_dir / "compile_commands.json"
+    if not cc.is_file():
+        return None, f"{build_dir.name} holds no compile_commands.json"
+    try:
+        entries = json.loads(cc.read_text(encoding="utf-8", errors="ignore"))
+    except (OSError, ValueError) as exc:
+        return None, f"{build_dir.name}/compile_commands.json is unreadable ({exc})"
+    rr = root.resolve()
+    out = set()
+    for e in entries:
+        f = e.get("file")
+        if not f:
             continue
-        segs = {s.lower() for s in p.relative_to(root).parts[:-1]}
-        if segs & guards.SKIP_SEGMENTS or any(
-                s.startswith(guards.SKIP_PREFIXES) for s in segs):
-            continue
-        if p.name in BUILD_INPUT_NAMES or p.name.startswith("sdkconfig") \
-                or p.suffix in BUILD_INPUT_EXT:
-            try:
-                m = p.stat().st_mtime
-            except OSError:
+        p = Path(f)
+        if not p.is_absolute():
+            p = (Path(e.get("directory") or build_dir) / p)
+        try:
+            rel = p.resolve().relative_to(rr)
+        except (ValueError, OSError):
+            continue                       # ESP-IDF component, outside the project
+        if rel.parts and rel.parts[0].lower().startswith("build"):
+            continue                       # generated into the build tree
+        out.add(p.resolve())
+    if not out:
+        # The file exists and lists nothing inside this tree. A build directory
+        # copied from elsewhere carries absolute paths to where it was built,
+        # and using it here would bind the log to another project's sources.
+        return None, (f"{build_dir.name}/compile_commands.json lists no source "
+                      f"inside this project - the build directory was most "
+                      f"likely produced elsewhere and copied in")
+    # Headers are not translation units, so compile_commands.json does not list
+    # them. Take those sitting with the sources it does list.
+    for d in {p.parent for p in list(out)}:
+        for pat in ("*.h", "*.hpp", "include/**/*.h"):
+            out.update(q.resolve() for q in d.glob(pat) if q.is_file())
+    # A source added since the last cmake run is absent from the list, and its
+    # absence is exactly what makes the build out of date. main/ and components/
+    # are where ESP-IDF projects keep sources; tests/ is not one of them.
+    for sub in ("main", "components"):
+        d = root / sub
+        if d.is_dir():
+            for q in d.rglob("*"):
+                if q.is_file() and q.suffix in (".c", ".h", ".cpp", ".hpp",
+                                                ".cc", ".S", ".s"):
+                    out.add(q.resolve())
+    for name in BUILD_INPUT_NAMES + ("partitions.csv", "idf_component.yml",
+                                     "dependencies.lock"):
+        p = root / name
+        if p.is_file():
+            out.add(p.resolve())
+    out.update(p.resolve() for p in root.glob("sdkconfig.defaults*")
+               if p.is_file())
+    return out, None
+
+
+def _newest_build_input(root: Path, build_dir: Path = None):
+    """(mtime, relative path, method) of the most recently touched build input."""
+    listed, why = _compiled_inputs(root, build_dir)
+    if listed is not None:
+        method = f"{build_dir.name}/compile_commands.json"
+        candidates = listed
+    else:
+        method = (f"a file sweep ({why}), so build inputs are inferred and "
+                  f"unrelated files may register")
+        candidates = []
+        for p in root.rglob("*"):
+            if not p.is_file():
                 continue
-            if newest is None or m > newest[0]:
-                newest = (m, p.relative_to(root).as_posix())
-    return newest
+            segs = {s.lower() for s in p.relative_to(root).parts[:-1]}
+            if segs & guards.SKIP_SEGMENTS or any(
+                    s.startswith(guards.SKIP_PREFIXES) for s in segs):
+                continue
+            if p.name in BUILD_INPUT_NAMES or p.name.startswith("sdkconfig") \
+                    or p.suffix in BUILD_INPUT_EXT:
+                candidates.append(p)
+    newest = None
+    for p in candidates:
+        try:
+            m = p.stat().st_mtime
+        except OSError:
+            continue
+        if newest is None or m > newest[0]:
+            try:
+                rel = p.relative_to(root).as_posix()
+            except ValueError:
+                rel = p.as_posix()
+            newest = (m, rel)
+    return (newest[0], newest[1], method) if newest else None
 
 
-def _build_log_evidence(root: Path, target: str):
+def _build_log_evidence(root: Path, target: str, build_dir: Path = None):
     """Warning count from an archived build log, bound to the tree it describes.
 
     Evidence is a file on disk with a path and a timestamp, never a number the
@@ -536,7 +620,7 @@ def _build_log_evidence(root: Path, target: str):
         "binding": None,
     }
 
-    newest = _newest_build_input(root)
+    newest = _newest_build_input(root, build_dir)
     if newest and newest[0] > log_mtime:
         gap = newest[0] - log_mtime
         when = (f"{int(gap)}s" if gap < 60 else
@@ -546,7 +630,7 @@ def _build_log_evidence(root: Path, target: str):
         ev["binding"] = (
             f"STALE - {newest[1]} was modified {when} after this log was "
             f"written, so the log no longer describes the source tree. "
-            f"Rebuild to re-establish it")
+            f"Rebuild to re-establish it. Build inputs read from {newest[2]}")
         return ev
     if RE_NO_WORK.search(text) or not RE_COMPILED.search(text):
         ev["binding"] = (
@@ -557,9 +641,11 @@ def _build_log_evidence(root: Path, target: str):
 
     ev["warnings"] = len(re.findall(r"^.*?: warning: ", text, re.M))
     ev["errors"] = len(re.findall(r"^.*?: error: ", text, re.M))
+    method = newest[2] if newest else "no build inputs found"
     ev["binding"] = (
         f"bound - no build input modified since the log was written; "
-        f"{len(RE_COMPILED.findall(text))} translation unit(s) compiled")
+        f"{len(RE_COMPILED.findall(text))} translation unit(s) compiled. "
+        f"Build inputs read from {method}")
     return ev
 
 
@@ -622,7 +708,7 @@ def collect_targets(root: Path, intent):
                           .isoformat(timespec="seconds"),
                     "warnings": None,           # not captured — see not_known
                 }
-        ev = _build_log_evidence(root, tgt)
+        ev = _build_log_evidence(root, tgt, bd)
         if ev:
             lb = entry.setdefault("last_build", {"artifact": None, "at": None})
             lb["warnings"] = ev["warnings"]
