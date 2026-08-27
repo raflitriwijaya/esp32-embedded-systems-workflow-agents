@@ -30,6 +30,17 @@ SKIP_SEGMENTS = {"build", "managed_components", ".git", "third_party",
                  "node_modules", "dist"}
 SKIP_PREFIXES = ("build_", "espressif__", "cmake-build")
 
+# Test and host-abstraction code, which IS scanned for platform violations - a
+# legacy driver in an on-target unity test is still a legacy driver - but must
+# never be what ESTABLISHES that the firmware uses FreeRTOS. A host-side stub
+# calling xTaskCreate() proves nothing about what runs on the device, and a
+# gate criterion satisfied that way is a false MACHINE_CHECKED.
+NONFIRMWARE_SEGMENTS = {"test", "tests", "testing", "mock", "mocks", "fake",
+                        "fakes", "stub", "stubs", "host", "simulator", "sim",
+                        "emulation", "fixtures", "examples"}
+NONFIRMWARE_FILE = re.compile(r"^(?:test_|mock_|fake_|stub_)|"
+                              r"(?:_test|_tests|_mock|_stub)\.[ch]\w*$")
+
 # ESP-IDF v6.0 removed these outright. driver/i2c.h is the exception that makes
 # this guard worth having: it is EOL, not removed, so it still compiles.
 LEGACY_HEADERS = {
@@ -399,6 +410,23 @@ def _is_source(path):
     if any(seg.startswith(SKIP_PREFIXES) for seg in segs):
         return False
     return p.lower().endswith(SOURCE_EXT)
+
+
+def is_firmware_source(path):
+    """A source file that plausibly ends up on the device.
+
+    `_is_source` deliberately keeps test and host code in scope, because a
+    removed driver header is worth catching wherever it appears. Establishing
+    that the firmware uses FreeRTOS is a different question, and test code
+    cannot answer it.
+    """
+    if not _is_source(path):
+        return False
+    p = path.replace("\\", "/")
+    segs = p.split("/")
+    if NONFIRMWARE_SEGMENTS.intersection(s.lower() for s in segs):
+        return False
+    return not NONFIRMWARE_FILE.search(segs[-1].lower())
 
 
 def _is_claim_doc(path):

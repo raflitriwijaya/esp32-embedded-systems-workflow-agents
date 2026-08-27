@@ -176,6 +176,7 @@ An optional **Attribute** column closes that. `quality-attributes.yaml` is **ext
 | `attribute-measurable` | Flags requirements resting only on attributes nothing can measure |
 | `attribute-conflicts` | The trade-offs this requirement set has bought into, quoted from the reference |
 | `conflict-disposition` | Every trade-off carries an `AD-S<n>-<NNN>` naming both attributes — the decision, not just the conflict |
+| `target-precision` | Each target is stated to the precision its stage demands (§2.2) |
 | `target-binds-criterion` | Targets cite real SECTION 5 criteria; a fabricated id is caught on any row |
 
 **Eight of the twelve have no measurable criteria anywhere.** Safety, Deterministic, Portable, Observable, Testable, Upgradeable, Secure and Resource Efficient carry definitions and patterns but no pass condition, so a requirement resting only on them is unverifiable by construction. Reporting that count is the same move as the 18-of-44 in the §8 review: naming what cannot be established is the product.
@@ -196,6 +197,27 @@ A record that names both attributes only in *Alternatives considered* is reporte
 Stage-scaled: at S1 an undisposed conflict is surfaced, not demanded, because a Prototype is where trade-offs are still being discovered. From S2 it is `MACHINE_REFUTED`. What this establishes is that a decision exists and names the pair — never that the decision resolves the conflict.
 
 The column is a **local convention**; SECTION 2 §2.1 does not mandate it. Without it the attribute checks report `UNVERIFIABLE` rather than failing. `templates/REQ-register.template.md` is the ready-to-copy table.
+
+### Measurable target precision — the bar moves with the stage
+
+SECTION 2 §2.2 opens with a sentence nothing enforced: *"A target that satisfies a gate at Stage 1 will fail the same gate at Stage 4."* `req-table-shape` confirmed the cell was non-empty and `target-binds-criterion` confirmed a cited criterion existed — so *"response shall be fast"* passed at Pre-Production exactly as `500 ms ± 100 ms @ −10…85 °C` did.
+
+`target-precision` reads the `Measurable Target` cell against the stage's own standard:
+
+| Stage | Bar | `500 ms ± 100 ms over −10…60 °C (calculated from datasheet)` |
+|---|---|---|
+| S1 | Order-of-magnitude accepted **if** logged as `ASM-S<n>-<NNN>` | ✅ |
+| S2 | Units **and** tolerance | ✅ |
+| S3 | Plus the operating conditions it holds under | ✅ |
+| S4 | Plus an empirical reference — no bare calculated value | ❌ |
+
+Identical cell, `MACHINE_CHECKED` at S3 and `MACHINE_REFUTED` at S4. Each finding quotes the stage's own violation response: *root-cause analysis required before gate* at S3, *gate blocked; waiver requires PIC risk acceptance* at S4.
+
+**A target citing a SECTION 5 criterion is exempt from the numeric bar.** Many of those criteria are qualitative by design — `R-ESP-01`'s pass condition is *"Zero unchecked ESP-IDF return values in port code"* — and demanding a tolerance from them would refuse requirements that are already correctly formed. The citation carries the Check Method, which is what the bar is really after.
+
+**A target with no operating conditions can say so.** A flash budget does not vary with temperature, and `condition-independent`, `build-time`, or `no operating-condition dependence` in the cell satisfies the S3 rule. Stating that none apply *is* an answer. Without this the check would nag forever at a target that is already right — the same "surfaced but never answerable" failure `conflict-disposition` exists to prevent.
+
+What this establishes is how a target is **stated**. Whether the number is true is a different question, and no reading of the cell answers it.
 
 ### Section 5 — RSMR × Stage obligations
 
@@ -223,6 +245,19 @@ RSMR-08: DEBT-002 revisits at S5, but this criterion becomes Mandatory at S4
 ```
 
 `RSMR_SPEC.md` carries the full matrix, the defect analysis, and the check boundaries.
+
+### Self-test — the framework checked against itself
+
+`stage_kernel.py selftest` compares four hand-written artifacts against the code and the tree they describe. Every one of them had drifted at least once:
+
+| Compared | Found |
+|---|---|
+| Guard registry vs `hooks/GUARD_SPEC.md` | `numeric-claim` documented as `strict`, registered as `guard` |
+| `legacy-driver` replacements vs the installed IDF | `driver/mcpwm_prelude` missing its `.h` — the guard fired correctly and handed back a path that does not exist |
+| `rsmr-matrix.yaml`, `quality-attributes.yaml` vs their specification hashes | (fresh) |
+| `LOG_EVENT_FIELDS` vs `STAGE_STATE_SCHEMA.md` §7 | The table was documentation only — nothing read it |
+
+Each check is verified by reintroducing the defect it was written for and confirming it fails. A test that can only pass proves nothing.
 
 ### Deliberately out of scope
 

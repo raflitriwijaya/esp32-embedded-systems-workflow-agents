@@ -203,6 +203,36 @@ defects:
       demand fleet-scale evidence from a project that has no fleet. sec.7.2 and
       sec.7.3 both operate on individual cells, so the matrix governs.
 
+  - id: scorecard-vs-matrix
+    source: workflow-iot/WORKFLOW_SECTION5.md
+    lines: [366, 486]
+    class: structural
+    digest: false
+    says: >-
+      sec.7.2 step 3 instructs the reviewer to check "every Mandatory criterion
+      against the scorecard (sec.6.2)"
+    correct: >-
+      The sec.6.2 scorecard template carries 22 criterion rows, four of them
+      "[Platform-specific criteria ...]" placeholders, against the sec.7.1
+      matrix of 40. At Stage 3 alone the matrix makes 24 criteria Mandatory, so
+      the reviewer is told to check them against a form that has no row for
+      several of them - fault-injection testing, HardFault/panic handler,
+      CHANGELOG updated per change, and thermal budget measured among them.
+
+      Two scorecard rows also collapse a pair of matrix rows into one line.
+      "R-02: Watchdog coverage verified" stands for both "Watchdog implemented"
+      and "Watchdog tested (induced hang -> reset)", which the matrix marks
+      Mandatory at different stages; one line cannot record a PASS on the first
+      and a FAIL on the second.
+
+      Counted mechanically, not judged: 22 rows against 40, four of the 22 being
+      placeholders. Which specific rows map to which is a matter of reading, and
+      is deliberately not asserted here.
+
+      Handled by generating the scorecard from the matrix rather than mapping
+      across the mismatch - `stage_kernel.py rsmr-scorecard`. The sec.6.2 header
+      fields are kept, so the artifact is still the one sec.6.3 governs.
+
 # Investigated and found NOT to be defects. Recorded so they are not re-raised.
 rejected:
   - id: nonatomic-counter

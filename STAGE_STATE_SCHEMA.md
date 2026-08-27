@@ -218,13 +218,15 @@ An attestation failing any condition does not count as `HUMAN_ATTESTED`; its gat
 
 The log is append-only. Existing entries are never edited; corrections are made by appending.
 
+These are enforced. `check_consistency` reads `LOG_EVENT_FIELDS` in `tools/stage_kernel.py`, and `stage_kernel.py selftest` compares that table against this one — a hand-written table nothing reads is a decoration, which is the invariant-I2 failure this framework keeps finding in itself.
+
 **`ts` must carry both a time and an offset** (`2026-08-26T09:14:00+07:00`). A bare date folds to midnight, which can make a same-day log appear non-monotonic and trip the §10 consistency check.
 
 | Event | Required fields | Notes |
 |---|---|---|
 | `stage_entered` | `stage`, `by`, `from` | `from: null` at project creation. A regression after a gate FAIL records the earlier stage in `from`, making regressions as visible as advances |
 | `gate_decided` | `gate`, `decision`, `by`, `unmet[]`, `dossier` | `decision` is `PASS` or `FAIL` only — SECTION 1 §3 recognises no conditional pass. The agent never produces this event |
-| `assumption_opened` | `id`, `origin`, `tier`, `subject`, `deadline` | `subject` is a short label only; the full record lives in the Assumption Register |
+| `assumption_opened` | `id`, `origin`, `tier`, `subject`, `owner`, `deadline` | `subject` is a short label only; the full record lives in the Assumption Register. `owner` is who is answerable for closing it — SECTION 1 asks for it at §3, §4 and in the Stage 2+ checklist, and a deadline nobody owns is a date, not an accountability |
 | `assumption_resolved` | `id`, `resolution`, `tier` | `resolution`: `measured` \| `confirmed` \| `designed-out` \| `invalidated` |
 | `attestation_made` | `id`, `criterion`, `by` | Detail lives in the `attestations:` block |
 | `attestation_superseded` | `id`, `superseded_by`, `reason` | The superseded attestation is retained |

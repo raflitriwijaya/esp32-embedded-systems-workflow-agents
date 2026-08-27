@@ -341,8 +341,8 @@ def load_attributes():
         return None
 
 
-def _attr_cells(root, reg):
-    """(line, [attribute names], target_cell) per requirement row."""
+def _attr_cells(root, reg, want_assumption=False):
+    """(line, id, [attribute names], target_cell[, assumption_cell]) per row."""
     pth = reg.get("requirements")
     if not pth or not (root / str(pth)).is_file():
         return None, None
@@ -354,12 +354,16 @@ def _attr_cells(root, reg):
     ai = next((n for n, h in enumerate(header) if "attribute" in h), None)
     ti = next((n for n, h in enumerate(header) if "measurable target" in h), None)
     ii = next((n for n, h in enumerate(header) if h.strip() == "id"), 0)
+    mi = next((n for n, h in enumerate(header) if "assumption" in h), None)
     out = []
     for ln, cells in rows:
         def cell(n):
             return cells[n] if n is not None and n < len(cells) else ""
         names = [x.strip() for x in cell(ai).split(",") if x.strip()] if ai is not None else []
-        out.append((ln, cell(ii), names, cell(ti)))
+        row = (ln, cell(ii), names, cell(ti))
+        if want_assumption:
+            row += (cell(mi),)
+        out.append(row)
     return out, (ai is not None)
 
 
@@ -639,12 +643,181 @@ def c_conflict_disposition(root, state, reg):
                "conflict is the engineer's judgement and stays that way"])
 
 
+# ====================================================== SECTION2 sec.2.2
+#
+# "The definition of 'measurable' changes across stages. A target that satisfies
+# a gate at Stage 1 will fail the same gate at Stage 4."
+#
+# Nothing checked that. `target-binds-criterion` confirms a cited criterion
+# exists, and `req-table-shape` confirms the cell is non-empty - so "response
+# shall be fast" passed at Pre-Production exactly as "500 ms +/- 100 ms @
+# -10..85 degC" did.
+#
+# A target citing a SECTION5 criterion is EXEMPT from the numeric bar. Many of
+# those criteria are qualitative by design - R-ESP-01's pass condition is "Zero
+# unchecked ESP-IDF return values in port code" - and demanding a tolerance from
+# them would refuse requirements that are already correctly formed. The citation
+# carries the Check Method, which is what the bar is really asking for.
+
+_UNIT = (r"(?:ms|us|µs|ns|s|min|h|hr|hours?|days?|weeks?|months?|years?"
+         r"|Hz|kHz|MHz|GHz|%|ppm|dBm|dBi|dB"
+         r"|mA|uA|µA|A|mV|uV|V|mW|uW|W|mAh|Wh|Ah"
+         r"|bytes?|B|KB|kB|KiB|MB|MiB|GB|GiB|kbps|Mbps|bps|baud"
+         r"|°C|degC|°F|K"
+         r"|cycles?|counts?|nodes?|units?|sessions?|messages?|samples?|resets?)")
+# A trailing \b never matches after '%' or 'degC', so every percentage target
+# read as unitless. Found by running the classifier over worked examples.
+RE_NUM_UNIT = re.compile(r"[-+]?\d[\d_]*(?:\.\d+)?\s*" + _UNIT + r"(?!\w)")
+RE_TOLERANCE = re.compile(r"±|\+/-|\+-|\bplus[ -]or[ -]minus\b")
+RE_BOUND = re.compile(r"≥|≤|>=|<=|[<>]\s*\d"
+                      r"|\bat least\b|\bat most\b|\bno more than\b|\bno less than\b"
+                      r"|\bmax(?:imum)?\b|\bmin(?:imum)?\b|\bwithin\b")
+RE_RANGE = re.compile(r"\d\s*" + _UNIT + r"?\s*(?:…|\.\.\.?|\bto\b|–|—)"
+                      r"\s*[-+]?\d")
+RE_VAGUE = re.compile(r"~|\bapprox(?:imately)?\b|\babout\b|\broughly\b|\bcirca\b"
+                      r"|\border of\b|\bballpark\b|\bfast\b|\bquick\b|\bslow\b"
+                      r"|\bsmall\b|\blarge\b|\bgood\b|\breasonable\b|\bacceptable\b")
+# An operating condition is a PHYSICAL one. "verified at 500 sessions" states a
+# load, not an environment, and counting it would let a Stage 3 target pass by
+# naming a number twice.
+RE_CONDITION = re.compile(
+    r"[-+]?\d[\d.]*\s*(?:°C|degC|°F)"
+    r"|\b\d[\d.]*\s*V\b\s*(?:…|\.\.|\bto\b|–|-)"
+    r"|\bambient\b|\btemperature\b|\bthermal\b|\bvoltage\b|\bsupply rail\b"
+    r"|\bRF\b|\benclosure\b|\bhumidity\b|\bderat\w+"
+    # Stating that no operating condition applies IS an answer to sec.2.2, and
+    # some targets genuinely have none - a flash budget does not vary with
+    # temperature. Without this the check nags forever at a target that is
+    # already correct, which is the "surfaced but never answerable" failure the
+    # conflict-disposition work exists to prevent. The engineer is making a
+    # claim here, in the cell, where a reviewer sees it.
+    r"|\bcondition[- ]independent\b|\benvironment[- ]independent\b"
+    r"|\bbuild[- ]time\b|\bcompile[- ]time\b|\bno operating[- ]condition\b",
+    re.I)
+RE_EMPIRICAL = re.compile(
+    r"[\w./\\-]+\.(?:log|csv|md|txt|json|yaml|png|pdf)\b"
+    r"|:\d+(?:-\d+)?\b"
+    r"|\b(?:TEST|INC)-[\w-]+\b"
+    r"|\bmeasured\b|\bpilot batch\b|\bCp/?Cpk\b", re.I)
+
+PRECISION_BAR = {
+    "S1": "order-of-magnitude accepted, if logged as an assumption",
+    "S2": "units and tolerance",
+    "S3": "units, tolerance, and the operating conditions it holds under",
+    "S4": "the above, plus an empirical reference - no bare calculated value",
+    "S5": "reviewed quarterly against fleet data",
+}
+
+
+def _target_shape(cell):
+    return {
+        "criterion": bool(RE_CRITERION.search(cell)),
+        "num_unit": bool(RE_NUM_UNIT.search(cell)),
+        "tolerance": bool(RE_TOLERANCE.search(cell)),
+        "bound": bool(RE_BOUND.search(cell)),
+        "range": bool(RE_RANGE.search(cell)),
+        "vague": bool(RE_VAGUE.search(cell)),
+        "condition": bool(RE_CONDITION.search(cell)),
+        "empirical": bool(RE_EMPIRICAL.search(cell)),
+    }
+
+
+def _precision_faults(stage, shape, target, assumption):
+    """Why this target falls short of the stage bar, or [] if it does not."""
+    bounded = shape["tolerance"] or shape["bound"] or shape["range"]
+    if stage == "S1":
+        # Imprecision is allowed here, provided it is logged rather than implied.
+        if (shape["vague"] or not shape["num_unit"]) and \
+                not RE_ASM_ID.search(assumption or ""):
+            return ["order-of-magnitude or unitless, with no ASM-S<n>-<NNN> in "
+                    "the Assumption column. sec.2.2 permits the imprecision at "
+                    "Prototype only when it is logged"]
+        return []
+    out = []
+    if not shape["num_unit"]:
+        out.append("no number with a unit")
+    if not bounded:
+        out.append("no tolerance, bound, or range - sec.2.2 asks for "
+                   "\"units and tolerance\" from S2 (\"500 ms +/- 100 ms\")")
+    if shape["vague"]:
+        out.append("carries an order-of-magnitude or subjective word, which "
+                   "sec.2.2 permits at S1 only")
+    if stage in ("S3", "S4", "S5") and not shape["condition"]:
+        out.append("states no operating condition - from S3 the tolerance must "
+                   "reflect real temperature, voltage, or RF conditions")
+    if stage in ("S4", "S5") and not shape["empirical"]:
+        out.append("cites no measurement - from S4 no calculated value is "
+                   "accepted as a target without empirical confirmation")
+    return out
+
+
+def c_target_precision(root, state, reg):
+    """SECTION2 sec.2.2: what counts as measurable tightens with the stage.
+
+    This establishes that a target is STATED to the precision the stage asks
+    for. Whether the number is true is a different question, and no reading of
+    the cell answers it.
+    """
+    stage = ((state or {}).get("current") or {}).get("stage")
+    if stage not in PRECISION_BAR:
+        return _f("target-precision", SKIPPED,
+                  f"stage {stage!r} has no sec.2.2 bar to apply")
+    rows, _has_attr = _attr_cells(root, reg, want_assumption=True)
+    if rows is None:
+        return _f("target-precision", SKIPPED, "requirements table unreadable")
+    if not rows:
+        return _f("target-precision", SKIPPED, "no requirements to assess")
+    if stage == "S5":
+        return _f("target-precision", SKIPPED,
+                  f"{len(rows)} requirement(s). At S5 sec.2.2 asks for quarterly "
+                  f"review against fleet data and a drift trend - neither is in "
+                  f"the requirements table, so this cannot be read from here")
+
+    faulty, exempt = [], 0
+    for ln, rid, _names, target, assumption in rows:
+        shape = _target_shape(target or "")
+        if shape["criterion"]:
+            exempt += 1
+            continue
+        why = _precision_faults(stage, shape, target, assumption)
+        if why:
+            faulty.append(f"{rid} line {ln}: {'; '.join(why)} -> "
+                          f"{(target or '(empty)')[:52]!r}")
+    assessed = len(rows) - exempt
+    tail = (f"; {exempt} cite a SECTION5 criterion and inherit its Check Method"
+            if exempt else "")
+    if faulty:
+        return _f("target-precision", REFUTED,
+                  f"{len(faulty)} of {assessed} target(s) fall short of the {stage} "
+                  f"bar - {PRECISION_BAR[stage]}{tail}",
+                  faulty[:8],
+                  [f"sec.2.2 violation response at {stage}: "
+                   + ("log the imprecision, no design change required"
+                      if stage == "S1" else
+                      "requirement renegotiation or design change before gate"
+                      if stage == "S2" else
+                      "root-cause analysis required before gate" if stage == "S3"
+                      else "gate blocked; waiver requires PIC risk acceptance"),
+                   "this establishes how the target is STATED, never whether the "
+                   "number is true"])
+    if assessed == 0:
+        return _f("target-precision", VERIFIED,
+                  f"every one of {len(rows)} target(s) cites a SECTION5 criterion "
+                  f"and inherits its Check Method - the sec.2.2 numeric bar does "
+                  f"not apply to any of them")
+    return _f("target-precision", VERIFIED,
+              f"all {assessed} numeric target(s) meet the {stage} bar - "
+              f"{PRECISION_BAR[stage]}{tail}",
+              hints=["stated to the right precision; whether the number is true "
+                     "is not something the cell can show"])
+
+
 CHECKS = [c_registers_present, c_req_table_shape, c_decision_records,
           c_req_references_resolve, c_orphan_requirements,
           c_assumption_references,
           c_attribute_vocabulary, c_attribute_measurable,
           c_attribute_conflicts, c_target_binds_criterion,
-          c_conflict_disposition]
+          c_conflict_disposition, c_target_precision]
 
 
 def run(root: Path, state):

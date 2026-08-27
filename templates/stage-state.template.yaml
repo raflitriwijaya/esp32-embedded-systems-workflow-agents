@@ -66,7 +66,7 @@ log:
 #   design_review_decided   outcome(ACCEPTED|REWORK), by, unmet[], dossier
 #                           SECTION2 sec.8 - runs INSIDE a stage, not at a gate
 #   assumption_opened       id, origin(agent-claim|human|field-incident), tier,
-#                           subject, deadline
+#                           subject, owner, deadline
 #   assumption_resolved     id, resolution(measured|confirmed|designed-out|
 #                           invalidated), tier
 #   attestation_made        id, criterion, by

@@ -57,7 +57,7 @@ tells you.
 
 | ID | Requirement | Attribute | Measurable Target | Drives | Source | Assumption | Stage Gate |
 |---|---|---|---|---|---|---|---|
-| REQ-S2-001 | The node shall continue operating through I2C bus faults | Robust | per R-ESP-04: every fallible call has a defined failure branch; fault injected in TEST-004 | FW-001 | BA-001 | NONE | Gate 2→3 |
+| REQ-S2-001 | The node shall continue operating through I2C bus faults | Robust | per R-ESP-01: zero unchecked ESP-IDF return values in port code; fault injected in TEST-004 | FW-001 | BA-001 | NONE | Gate 2→3 |
 | REQ-S2-002 | The node shall run 30 days without intervention | Reliable | per RL-ESP-06: stack high-water-mark margin ≥ 25% on every task | FW-002 | BA-002 | ASM-S2-001 | Gate 2→3 |
 | REQ-S2-003 | *(delete this row and the two above; they are examples)* | | | | | | |
 
@@ -68,7 +68,7 @@ tells you.
 | **ID** | `REQ-S<n>-<NNN>`, sequential within stage, **never renumbered** — a deleted ID leaves a tombstone row |
 | **Requirement** | One declarative, falsifiable sentence. No conjunctions — split compound statements |
 | **Attribute** | One or more of the twelve, comma-separated. Closed vocabulary |
-| **Measurable Target** | A quantified threshold. Where the attribute is one of the four RSMR ones, **cite the SECTION 5 criterion** (`R-ESP-04`, `RL-ESP-06`, …) so the number carries its measurement method |
+| **Measurable Target** | A quantified threshold, stated to the precision your **current stage** demands (sec.2.2): S1 order-of-magnitude if logged as an `ASM-`, S2 units and tolerance, S3 plus operating conditions, S4 plus an empirical reference. A target with no operating-condition dependence may say `build-time` or `condition-independent`. Where the attribute is one of the four RSMR ones, **cite the SECTION 5 criterion** (`R-ESP-01`, `RL-ESP-06`, …) so the target carries its Check Method and Pass Condition. Quote the criterion's own pass condition, not a paraphrase — `target-binds-criterion` confirms the id exists, and no check can tell you the id is the *right* one |
 | **Drives** | `HW-`, `FW-`, `TEST-`, `SCH-` ids |
 | **Source** | `BA-`, `INC-`, `AD-`, or a parent `REQ-` |
 | **Assumption** | `ASM-S<n>-<NNN>` or `NONE`. Where the target rests on an unvalidated premise, this column is the provenance — the numeric-claim guard treats it as such |
@@ -87,6 +87,7 @@ Run `python tools/stage_kernel.py design -C .`:
 | `attribute-conflicts` | The declared trade-offs this requirement set has bought into, quoted from the reference |
 | `target-binds-criterion` | Targets cite real SECTION 5 criteria; a fabricated criterion id is caught on any row |
 | `conflict-disposition` | Every trade-off carries a decision record naming both attributes |
+| `target-precision` | Each target is stated to the precision its stage demands (sec.2.2) |
 
 None of them establishes that a target is **correct**. That boundary does not move.
 

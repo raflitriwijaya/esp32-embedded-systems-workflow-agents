@@ -64,14 +64,16 @@ def c_platform_conventions(ctx):
     SCAN_CAP = 400
     scanned = srcs[:SCAN_CAP]
     truncated = len(srcs) - len(scanned)
-    bad, uses_rtos = [], False
+    bad, rtos_firmware, rtos_testonly = [], [], []
     for p in scanned:
         try:
             text = p.read_text(encoding="utf-8", errors="ignore")
         except OSError:
             continue
         if re.search(r"\bxTaskCreate", text):
-            uses_rtos = True
+            rel = p.relative_to(root).as_posix()
+            (rtos_firmware if guards.is_firmware_source(rel)
+             else rtos_testonly).append(rel)
         for f in guards.g_arduino(str(p), text, ctx) + \
                 guards.g_legacy_driver(str(p), text, ctx):
             bad.append(f"{p.relative_to(root).as_posix()}:{f.get('line')} "
@@ -79,7 +81,15 @@ def c_platform_conventions(ctx):
     if bad:
         return _r(REFUTED, "platform convention violations found in source",
                   evidence=bad[:8])
-    if not uses_rtos:
+    if not rtos_firmware:
+        if rtos_testonly:
+            return _r(UNVERIFIABLE,
+                      f"xTaskCreate* appears only in test or host-abstraction "
+                      f"code, which does not establish what runs on the device",
+                      evidence=rtos_testonly[:6],
+                      hints=["move the check to firmware, or attest this "
+                             "criterion - a host-side stub creating a task is "
+                             "not the firmware creating a task"])
         return _r(UNVERIFIABLE,
                   "no xTaskCreate* call found - FreeRTOS use is not established "
                   "by the source alone",
@@ -94,29 +104,65 @@ def c_platform_conventions(ctx):
                          f"components so each is scanned within the cap"])
     return _r(VERIFIED,
               f"all {len(srcs)} source files: no Arduino constructs, no drivers "
-              f"removed in ESP-IDF v6.0, FreeRTOS task creation present")
+              f"removed in ESP-IDF v6.0, FreeRTOS task creation present in "
+              f"firmware",
+              evidence=[f"task created in {p}" for p in rtos_firmware[:3]],
+              hints=([f"{len(rtos_testonly)} further call(s) sit in test or host "
+                      f"code and were not counted toward this"]
+                     if rtos_testonly else []))
 
 
 def c_assumptions_owned(ctx):
-    """Gate 1->2: every unresolved ambiguity logged with owner + deadline."""
+    """Gate 1->2: every unresolved ambiguity logged with owner + deadline.
+
+    Two things this got wrong. It checked the deadline and not the owner, while
+    SECTION1 asks for both - at sec.3, at sec.4, and again in the Stage 2+
+    checklist. And an empty log returned MACHINE_CHECKED "no open assumptions",
+    which reads the absence of records as the absence of ambiguities. A project
+    that logged nothing is indistinguishable from one that had nothing to log,
+    and only one of those satisfies the criterion.
+    """
     state = ctx.get("state")
     if not state:
         return _r(UNVERIFIABLE, "no stage-state.yaml to read")
-    opened = {e.get("id"): e for e in (state.get("log") or [])
-              if isinstance(e, dict) and e.get("event") == "assumption_opened"}
-    resolved = {e.get("id") for e in (state.get("log") or [])
-                if isinstance(e, dict) and e.get("event") == "assumption_resolved"}
+    events = [e for e in (state.get("log") or []) if isinstance(e, dict)]
+    opened = {e.get("id"): e for e in events
+              if e.get("event") == "assumption_opened"}
+    resolved = {e.get("id") for e in events
+                if e.get("event") == "assumption_resolved"}
     open_ids = [i for i in opened if i not in resolved]
+
+    if not opened:
+        return _r(UNVERIFIABLE,
+                  "the log records no assumption ever opened, so nothing "
+                  "distinguishes a project with no unresolved ambiguity from "
+                  "one that logged none",
+                  hints=["this criterion is about the original business ask; "
+                         "if it genuinely held no ambiguity, attest that rather "
+                         "than leaving it to an empty log"])
     if not open_ids:
-        return _r(VERIFIED, "no open assumptions")
-    missing = [i for i in open_ids if not opened[i].get("deadline")]
-    if missing:
+        return _r(VERIFIED,
+                  f"all {len(opened)} assumption(s) ever opened are resolved - "
+                  f"none is outstanding",
+                  evidence=[f"{i} resolved" for i in list(opened)[:6]])
+
+    no_owner = [i for i in open_ids if not opened[i].get("owner")]
+    no_deadline = [i for i in open_ids if not opened[i].get("deadline")]
+    if no_owner or no_deadline:
+        ev = [f"{i}: no owner" for i in no_owner[:5]]
+        ev += [f"{i}: no deadline" for i in no_deadline[:5]]
         return _r(REFUTED,
-                  f"{len(missing)} of {len(open_ids)} open assumptions have no "
-                  f"deadline", evidence=missing[:8])
+                  f"of {len(open_ids)} open assumption(s), {len(no_owner)} have "
+                  f"no owner and {len(no_deadline)} no deadline",
+                  evidence=ev,
+                  hints=["SECTION1 sec.3 asks for both; an assumption with a "
+                         "deadline and no owner has a date nobody is answerable "
+                         "for"])
     return _r(VERIFIED,
-              f"all {len(open_ids)} open assumptions carry a deadline",
-              hints=[f"{i} due {opened[i].get('deadline')}" for i in open_ids[:6]])
+              f"all {len(open_ids)} open assumption(s) carry an owner and a "
+              f"deadline",
+              hints=[f"{i} -> {opened[i].get('owner')}, due "
+                     f"{opened[i].get('deadline')}" for i in open_ids[:6]])
 
 
 def c_zero_warnings(ctx):
@@ -128,19 +174,34 @@ def c_zero_warnings(ctx):
     targets = [t for t in ctx.get("targets", []) if t.get("configured")]
     if not targets:
         return _r(UNVERIFIABLE, "no configured target to build")
-    unlogged, warned, clean = [], [], []
+    unlogged, unbound, warned, clean = [], [], [], []
     for t in targets:
         lb = t.get("last_build") or {}
         w = lb.get("warnings")
+        binding = lb.get("log_binding")
         if w is None:
-            unlogged.append(t["target"])
+            # A log that exists but does not describe the current tree is not
+            # the same as no log at all, and the engineer needs to know which.
+            if lb.get("log") and binding:
+                unbound.append(f"{t['target']}: {lb['log']} - {binding}")
+            else:
+                unlogged.append(t["target"])
         elif w > 0:
             warned.append(f"{t['target']}: {w} warning(s) in {lb.get('log')}")
         else:
-            clean.append(f"{t['target']}: 0 warnings in {lb.get('log')}")
+            clean.append(f"{t['target']}: 0 warnings in {lb.get('log')}"
+                         + (f" ({binding})" if binding else ""))
     if warned:
         return _r(REFUTED, "compiler warnings present in an archived build log",
                   evidence=warned)
+    if unbound:
+        return _r(UNVERIFIABLE,
+                  f"a build log exists but does not establish this criterion "
+                  f"for: {', '.join(u.split(':')[0] for u in unbound)}",
+                  evidence=unbound + clean,
+                  hints=["rebuild to bind a log to the current source tree - a "
+                         "clean log over stale or uncompiled sources is not "
+                         "evidence of a clean build"])
     if unlogged:
         return _r(UNVERIFIABLE,
                   f"no archived build log for: {', '.join(unlogged)}",
@@ -150,30 +211,116 @@ def c_zero_warnings(ctx):
               evidence=clean)
 
 
+# SECTION2 sec.6.5 fixes the ICD format, field by field. Two of the fields are
+# conditional on the QoS class, which is what makes this checkable rather than
+# a keyword hunt.
+RE_ICD_HEAD = re.compile(r"^\s*ICD-([A-Za-z0-9_-]+)\s*:", re.M)
+ICD_FIELDS = {
+    "qos": r"QoS class\s*:\s*(.+)",
+    "retry_count": r"Retry count\s*:\s*(.+)",
+    "retry_interval": r"Retry interval\s*:\s*(.+)",
+    "schema_version": r"Schema version\s*:\s*(.+)",
+    "link_to": r"Link to\s*:\s*(.+)",
+}
+QOS_CLASSES = ("best-effort", "at-least-once", "exactly-once")
+RE_TBD = re.compile(r"\bTBD\b", re.I)
+RE_ASM = re.compile(r"\bASM-S\d-\d{3}\b")
+
+
 def c_no_tbd(ctx):
-    """Gate 2->3: retry/QoS/backoff stated for every link - no TBD remains."""
+    """Gate 2->3: retry/QoS/backoff stated for every link - no TBD remains.
+
+    This read the documents for the literal string TBD and reported
+    MACHINE_CHECKED when it found none. A connectivity document mentioning
+    retry, QoS and backoff exactly zero times passed that way: absence of the
+    word TBD is not presence of the parameters, and the criterion names both.
+
+    It was also stricter than the specification in the other direction. sec.6.5
+    permits a TBD field at the current stage provided it is logged as an
+    ASM-<STAGE>-<NNN>, and a bare TBD scan refuses that.
+
+    sec.6.5 fixes the ICD format precisely enough to check field by field,
+    including the two fields whose necessity depends on the QoS class.
+    """
     root = ctx["root"]
     dirs = [root / "design" / "connectivity", root / "design" / "icd"]
     files = [p for d in dirs if d.is_dir() for p in d.rglob("*.md")]
     if not files:
         return _r(UNVERIFIABLE,
                   "design/connectivity/ and design/icd/ hold no documents")
-    hits = []
+
+    links, docs_without_icd, missing, bad_qos, bare_tbd = [], [], [], [], []
     for p in files:
         try:
             text = p.read_text(encoding="utf-8", errors="ignore")
         except OSError:
             continue
-        for m in re.finditer(r"\bTBD\b", text, re.I):
-            hits.append(f"{p.relative_to(root).as_posix()}:"
-                        f"{text.count(chr(10), 0, m.start()) + 1}")
-    if hits:
-        return _r(REFUTED, f"TBD found in {len(set(h.split(':')[0] for h in hits))} "
-                           f"connectivity/ICD document(s)", evidence=hits[:8])
+        rel = p.relative_to(root).as_posix()
+        heads = list(RE_ICD_HEAD.finditer(text))
+        if not heads:
+            docs_without_icd.append(rel)
+            continue
+        for i, h in enumerate(heads):
+            end = heads[i + 1].start() if i + 1 < len(heads) else len(text)
+            block, link = text[h.start():end], h.group(1)
+            links.append(f"{rel}:ICD-{link}")
+            vals = {}
+            for key, pat in ICD_FIELDS.items():
+                m = re.search(pat, block, re.I)
+                vals[key] = m.group(1).strip() if m else None
+                if not vals[key]:
+                    missing.append(f"{rel} ICD-{link}: no "
+                                   f"'{pat.split(chr(92))[0].strip()}' field")
+            q = (vals.get("qos") or "").lower()
+            cls = next((c for c in QOS_CLASSES if c in q), None)
+            if vals.get("qos") and not cls and not RE_TBD.search(q):
+                bad_qos.append(f"{rel} ICD-{link}: QoS class {vals['qos']!r} is "
+                               f"not one of {', '.join(QOS_CLASSES)}")
+            # Conditional fields, per sec.6.5's own parenthetical notes.
+            if cls in ("at-least-once", "exactly-once") and \
+                    not re.search(r"Ack timeout\s*:\s*\S", block, re.I):
+                missing.append(f"{rel} ICD-{link}: QoS is {cls}, which sec.6.5 "
+                               f"requires an 'Ack timeout' for")
+            if cls == "exactly-once" and \
+                    not re.search(r"Dedup window\s*:\s*\S", block, re.I):
+                missing.append(f"{rel} ICD-{link}: QoS is exactly-once, which "
+                               f"sec.6.5 requires a 'Dedup window' for")
+            # sec.6.5 permits a TBD field, but only against a logged assumption.
+            if RE_TBD.search(block) and not RE_ASM.search(block):
+                ln = text.count(chr(10), 0, h.start()) + 1
+                bare_tbd.append(f"{rel}:{ln} ICD-{link}: TBD with no "
+                                f"ASM-S<n>-<NNN> - sec.6.5 permits the TBD only "
+                                f"when it is logged as an assumption")
+
+    if not links:
+        return _r(UNVERIFIABLE,
+                  f"{len(files)} connectivity/ICD document(s), none containing an "
+                  f"'ICD-<LINKID>:' block - no link is described in the sec.6.5 "
+                  f"format, so nothing here states retry, QoS, or backoff",
+                  evidence=docs_without_icd[:6],
+                  hints=["SECTION2 sec.6.5 gives the block format"])
+    problems = bare_tbd + missing + bad_qos
+    if problems:
+        return _r(REFUTED,
+                  f"{len(problems)} problem(s) across {len(links)} declared link(s): "
+                  f"{len(bare_tbd)} unlogged TBD, {len(missing)} missing field, "
+                  f"{len(bad_qos)} QoS class outside the three sec.6.5 allows",
+                  evidence=problems[:8],
+                  hints=([f"{len(docs_without_icd)} document(s) carry no ICD block "
+                          f"at all: {', '.join(docs_without_icd[:3])}"]
+                         if docs_without_icd else []))
     return _r(VERIFIED,
-              f"no TBD across {len(files)} connectivity/ICD document(s)",
-              hints=["absence of the literal TBD does not prove every parameter "
-                     "is stated - only that none is openly marked outstanding"])
+              f"all {len(links)} declared link(s) state QoS class, retry count, "
+              f"retry interval with backoff, schema version and a requirement "
+              f"link; conditional Ack timeout and Dedup window present where the "
+              f"QoS class requires them",
+              evidence=links[:6],
+              hints=(["fields are present and well-formed; whether the values are "
+                      "right for the link is not something the document can show"]
+                     + ([f"{len(docs_without_icd)} document(s) in these folders "
+                         f"carry no ICD block and were not assessed: "
+                         f"{', '.join(docs_without_icd[:3])}"]
+                        if docs_without_icd else [])))
 
 
 # ============================================================ registry

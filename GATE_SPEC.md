@@ -163,3 +163,29 @@ Objections are carried across **verbatim**, including ones the assembler disagre
 | Gates 3→4, 4→5, 5→1 | Their criteria need PCBs, pilot batches, burn-in and regulatory packages. Writing checks against conditions never yet observed would produce specifications untested by reality |
 | Trace-chain integrity (SECTION 4 §1.4) | Requires the trace register, which no project has yet |
 | Per-criterion machine checks beyond the four listed | Deliberate. Each additional check must earn `MACHINE_CHECKED` honestly, or it belongs as a hint |
+
+## 6. What each gate check establishes — and what it does not
+
+Four checks. Every one of them was, at some point, reporting `MACHINE_CHECKED` for something adjacent to its criterion rather than the criterion itself. They are listed here with the boundary made explicit, because that boundary is the whole product.
+
+| Check | Establishes | Does not |
+|---|---|---|
+| `platform-conventions` | No Arduino constructs, no drivers removed in v6.0, **and a task created in firmware source** | That the task is the right task, or that all sources were read when the scan cap truncates |
+| `assumptions-owned` | Every open assumption carries **both** an owner and a deadline | That the owner will act, or that the ambiguities logged are all of them |
+| `zero-warnings` | Zero warnings in a build log **bound to the current source tree** by a compile that actually happened | That the build is reproducible, or that warnings-as-errors was on |
+| `no-tbd` | Every declared link states QoS class, retry count, retry interval with backoff, schema version and a requirement link, with the conditional fields their QoS class requires | That the values are right for the link |
+
+### 6.1 The four false verdicts, and what they teach
+
+Each was found by building a project that *should* fail and watching the gate pass it.
+
+**`platform-conventions` counted test code as firmware.** `_is_source` skips `build/` and `managed_components/` but not `tests/` — deliberately, because a removed driver header is worth catching wherever it appears. Establishing that the *firmware* uses FreeRTOS is a different question, and a host-side stub calling `xTaskCreate()` answers it wrongly. Now split: `guards.is_firmware_source()` gates the RTOS claim, the wider scan still gates the violation claim, and the evidence names the file that creates the task.
+
+**`zero-warnings` trusted a log that described a different tree.** The docstring said *"evidence is a file on disk with a path and a timestamp, never a number the kernel inferred"* — true, and not enough. A timestamp records when the **log** was written, not what source it describes. Editing a file after archiving a clean log left the gate reporting zero warnings over code that ESP-IDF v6.0 would refuse to compile. Two ways a log establishes nothing, and both now yield *unknown* rather than *zero*: **stale** (a build input touched after the log) and **no-op** (the run compiled nothing, so it emitted no warnings either).
+
+**`no-tbd` searched for a word instead of the parameters.** A connectivity document mentioning retry, QoS and backoff exactly zero times passed, because it contained no literal `TBD`. It was simultaneously *stricter* than the specification, which permits a TBD field when it is logged as an `ASM-` (§6.5). Now parsed against §6.5's own block format, field by field, including `Ack timeout` (required for at-least-once and exactly-once) and `Dedup window` (required for exactly-once).
+
+**`assumptions-owned` checked half the criterion, then read silence as success.** SECTION 1 asks for owner **and** deadline — at §3, at §4, and in the Stage 2+ checklist. The check verified deadlines alone, and `stage-state.yaml` had no `owner` field at all for it to read. Worse, an empty log returned `MACHINE_CHECKED` *"no open assumptions"*: a project that logged nothing is indistinguishable from one that had nothing to log, and only one of those satisfies the criterion. `owner` is now a required field on `assumption_opened`, enforced by `check_consistency` and cross-checked against `STAGE_STATE_SCHEMA.md` by `selftest`.
+
+The common shape: **a check that reads something cheap and reports it as something expensive.** Absence of a word for presence of a parameter. Test code for firmware. A file's mtime for a source tree's state. An empty log for an empty problem space.
+

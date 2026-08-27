@@ -250,9 +250,67 @@ def _ts(e):
     return None
 
 
+# ================================================ log event required fields
+#
+# STAGE_STATE_SCHEMA.md sec.7 tabulates these, and nothing read the table. A
+# hand-written table nothing enforces is a decoration, which is the same
+# invariant-I2 failure the guard registry had against GUARD_SPEC.md.
+#
+# `owner` on assumption_opened is new here. SECTION1 asks for it three times -
+# sec.3 Gate 1->2 "logged with owner + deadline", sec.4 "a logged assumption
+# with an owner and a resolution deadline", and the Stage 2+ checklist "All
+# open assumptions have owners and deadlines". The schema omitted it, so the
+# gate check verified deadlines alone and reported the whole criterion
+# MACHINE_CHECKED.
+LOG_EVENT_FIELDS = {
+    "stage_entered": ["stage", "by", "from"],
+    "gate_decided": ["gate", "decision", "by", "unmet", "dossier"],
+    "assumption_opened": ["id", "origin", "tier", "subject", "owner", "deadline"],
+    "assumption_resolved": ["id", "resolution", "tier"],
+    "attestation_made": ["id", "criterion", "by"],
+    "attestation_superseded": ["id", "superseded_by", "reason"],
+    "enforcement_raised": ["to", "by"],
+    "enforcement_lowered": ["to", "by", "reason", "expires"],
+    "waiver_granted": ["criterion", "reason", "expires", "by"],
+    "target_added": ["target", "reason"],
+    "target_removed": ["target", "reason"],
+    "design_review_decided": ["outcome", "by", "unmet", "dossier"],
+    "schema_migrated": ["from", "to"],
+}
+# `from: null` at project creation and `unmet: []` on a clean gate are both
+# meaningful values. Presence of the key is what is required, not truthiness.
+NULLABLE_FIELDS = {("stage_entered", "from"), ("gate_decided", "unmet"),
+                   ("design_review_decided", "unmet")}
+
+
+def _log_field_failures(state):
+    out = []
+    for n, e in enumerate(state.get("log") or [], 1):
+        if not isinstance(e, dict):
+            out.append(f"log entry {n} is not a mapping")
+            continue
+        ev = e.get("event")
+        if not ev:
+            out.append(f"log entry {n} has no event")
+            continue
+        req = LOG_EVENT_FIELDS.get(ev)
+        if req is None:
+            out.append(f"log entry {n}: event {ev!r} is not one the schema "
+                       f"defines - a typo here silently drops the entry from "
+                       f"every fold")
+            continue
+        for f in req:
+            if f not in e:
+                out.append(f"log entry {n} ({ev}) has no {f!r} - "
+                           f"STAGE_STATE_SCHEMA.md sec.7 requires it")
+            elif e[f] is None and (ev, f) not in NULLABLE_FIELDS:
+                out.append(f"log entry {n} ({ev}) has {f}: null")
+    return out
+
+
 def check_consistency(state, folded, root: Path = Path(".")) -> list[str]:
     """SCHEMA §10. Returns a list of human-readable failures."""
-    f = []
+    f = _log_field_failures(state)
     cur = state.get("current") or {}
     stage = cur.get("stage")
 
@@ -405,13 +463,55 @@ def read_idf_version(idf: Path):
     return None, None
 
 
-def _build_log_evidence(root: Path, target: str):
-    """Warning count from an archived build log, with provenance.
+# Files whose change invalidates a build log. A log describes the tree as it
+# stood when it was written; anything here touched afterwards means it no
+# longer describes the tree the engineer is about to be judged on.
+BUILD_INPUT_EXT = (".c", ".h", ".cpp", ".hpp", ".cc", ".cxx", ".S", ".s",
+                   ".cmake", ".ld", ".csv", ".yml", ".yaml")
+BUILD_INPUT_NAMES = ("CMakeLists.txt", "Kconfig", "Kconfig.projbuild",
+                     "idf_component.yml", "sdkconfig", "sdkconfig.defaults")
+# A ninja run that compiled nothing emits no warnings, which is not the same
+# as compiling cleanly.
+RE_COMPILED = re.compile(r"Building (?:C|CXX|ASM) object|\bCompiling\b", re.M)
+RE_NO_WORK = re.compile(r"ninja: no work to do", re.I)
 
-    The digest reported build_warnings as unknown from the day it was written,
-    because nothing captured a build log. This reads one if it exists: evidence
-    is a file on disk with a path and a timestamp, never a number the kernel
-    inferred. No log means the value stays unknown - it never becomes zero.
+
+def _newest_build_input(root: Path):
+    """(mtime, relative path) of the most recently touched build input."""
+    newest = None
+    for p in root.rglob("*"):
+        if not p.is_file():
+            continue
+        segs = {s.lower() for s in p.relative_to(root).parts[:-1]}
+        if segs & guards.SKIP_SEGMENTS or any(
+                s.startswith(guards.SKIP_PREFIXES) for s in segs):
+            continue
+        if p.name in BUILD_INPUT_NAMES or p.name.startswith("sdkconfig") \
+                or p.suffix in BUILD_INPUT_EXT:
+            try:
+                m = p.stat().st_mtime
+            except OSError:
+                continue
+            if newest is None or m > newest[0]:
+                newest = (m, p.relative_to(root).as_posix())
+    return newest
+
+
+def _build_log_evidence(root: Path, target: str):
+    """Warning count from an archived build log, bound to the tree it describes.
+
+    Evidence is a file on disk with a path and a timestamp, never a number the
+    kernel inferred. That was true and it was not enough: a timestamp records
+    when the LOG was written, not which source it describes. Editing a file
+    after archiving a clean log left the gate reporting MACHINE_CHECKED "zero
+    warnings" over code that would not compile - ESP-IDF v6.0 defaults to
+    warnings-as-errors, so the introduced warning was a build failure.
+
+    Two ways a log fails to establish anything, and both now return warnings as
+    unknown rather than zero:
+
+      stale  - a build input was touched after the log was written
+      no-op  - the run compiled nothing, so it emitted no warnings either
     """
     d = root / "tests" / "reports"
     if not d.is_dir():
@@ -423,17 +523,44 @@ def _build_log_evidence(root: Path, target: str):
     log = cands[0]
     try:
         text = log.read_text(encoding="utf-8", errors="ignore")
+        log_mtime = log.stat().st_mtime
     except OSError:
         return None
-    warn = len(re.findall(r"^.*?: warning: ", text, re.M))
-    err = len(re.findall(r"^.*?: error: ", text, re.M))
-    return {
-        "warnings": warn,
-        "errors": err,
+
+    ev = {
+        "warnings": None,
+        "errors": None,
         "source": log.relative_to(root).as_posix(),
-        "at": datetime.fromtimestamp(log.stat().st_mtime)
-              .astimezone().isoformat(timespec="seconds"),
+        "at": datetime.fromtimestamp(log_mtime).astimezone()
+              .isoformat(timespec="seconds"),
+        "binding": None,
     }
+
+    newest = _newest_build_input(root)
+    if newest and newest[0] > log_mtime:
+        gap = newest[0] - log_mtime
+        when = (f"{int(gap)}s" if gap < 60 else
+                f"{int(gap // 60)}m" if gap < 3600 else
+                f"{gap / 3600:.1f}h" if gap < 86400 else
+                f"{gap / 86400:.1f}d")
+        ev["binding"] = (
+            f"STALE - {newest[1]} was modified {when} after this log was "
+            f"written, so the log no longer describes the source tree. "
+            f"Rebuild to re-establish it")
+        return ev
+    if RE_NO_WORK.search(text) or not RE_COMPILED.search(text):
+        ev["binding"] = (
+            "NO-OP - this run compiled nothing, so its zero warnings say "
+            "nothing about whether the source compiles cleanly. Build from "
+            "clean, or touch the sources, to produce a log that does")
+        return ev
+
+    ev["warnings"] = len(re.findall(r"^.*?: warning: ", text, re.M))
+    ev["errors"] = len(re.findall(r"^.*?: error: ", text, re.M))
+    ev["binding"] = (
+        f"bound - no build input modified since the log was written; "
+        f"{len(RE_COMPILED.findall(text))} translation unit(s) compiled")
+    return ev
 
 
 def _target_from_cfg(cfg, sdk_path, target, source):
@@ -501,6 +628,7 @@ def collect_targets(root: Path, intent):
             lb["warnings"] = ev["warnings"]
             lb["errors"] = ev["errors"]
             lb["log"] = ev["source"]
+            lb["log_binding"] = ev["binding"]
             lb["log_at"] = ev["at"]
         found[tgt] = entry
 
@@ -511,10 +639,29 @@ def collect_targets(root: Path, intent):
         if tgt and tgt not in found:
             found[tgt] = _target_from_cfg(cfg, root_sdk, tgt, "sdkconfig")
 
+    # "Never built" and "the kernel is looking in the wrong directory" render
+    # identically as configured:false, and an engineer whose stage-state.yaml
+    # sits a level above the ESP-IDF project gets a permanently degraded agent
+    # with nothing saying why. Name the second case when it is the likely one.
+    misplaced = None
+    if not found and not (root / "CMakeLists.txt").is_file():
+        for sub in sorted(p for p in root.iterdir() if p.is_dir()):
+            if sub.name.startswith(".") or sub.name in guards.SKIP_SEGMENTS:
+                continue
+            ok, why = detect_idf_project(sub)
+            if ok and why != STATE_NAME:
+                misplaced = f"{sub.name}/ ({why})"
+                break
     for t in (intent or []):
         if t not in found:
-            found[t] = {"target": t, "configured": False,
-                        "note": "declared in intent but no build dir or sdkconfig found"}
+            note = "declared in intent but no build dir or sdkconfig found"
+            if misplaced:
+                note += (f" - an ESP-IDF project appears to be at {misplaced}, "
+                         f"not at this root. The kernel reads sdkconfig, build "
+                         f"dirs and tests/reports/ relative to the directory "
+                         f"holding {STATE_NAME}, so move it there or run with "
+                         f"-C pointing at the project")
+            found[t] = {"target": t, "configured": False, "note": note}
     return [found[k] for k in sorted(found)]
 
 
@@ -784,6 +931,11 @@ def render_platform(cache, stale_reason) -> list[str]:
                     f"errors: {y(lb.get('errors'))}, "
                     f"log: {y(lb.get('log'))} }}")
         L.append(f"        last_build: {lb_s} }}")
+        # `warnings: null` beside a `log:` path reads like a failed read rather
+        # than a log that does not describe this tree. Say which it is.
+        if lb and lb.get("warnings") is None and lb.get("log_binding"):
+            L.append(f"      # {t['target']}: warnings unknown - "
+                     f"{lb['log_binding']}")
         if lb and lb.get("warnings"):
             L.append(f"      # WARNING {t['target']}: {lb['warnings']} compiler "
                      f"warning(s) in {lb.get('log')} - Gate 2->3 requires zero")
@@ -1627,6 +1779,58 @@ def _check_extracted_freshness():
                 bad.append(f"{name}: {src} not reachable from here")
     return bad, checked
 
+_SCHEMA_ROW = re.compile(r"^\|\s*`([a-z_]+)`(?:\s*/\s*`([a-z_]+)`)?\s*\|"
+                         r"\s*([^|]*?)\s*\|")
+_SCHEMA_FIELD = re.compile(r"`([a-z_]+)(?:\[\])?`")
+
+
+def _schema_log_fields():
+    """{event: [fields]} as STAGE_STATE_SCHEMA.md sec.7 tabulates them."""
+    f = Path(__file__).resolve().parent.parent / "STAGE_STATE_SCHEMA.md"
+    if not f.is_file():
+        return None
+    out = {}
+    for line in f.read_text(encoding="utf-8").splitlines():
+        m = _SCHEMA_ROW.match(line)
+        if not m:
+            continue
+        names = [n for n in (m.group(1), m.group(2)) if n]
+        fields = _SCHEMA_FIELD.findall(m.group(3))
+        if not fields:
+            continue
+        for n in names:
+            if n in LOG_EVENT_FIELDS or n in out:
+                out[n] = fields
+    return out or None
+
+
+def _check_log_field_table():
+    """Drift between the enforced table and the documented one."""
+    doc = _schema_log_fields()
+    if doc is None:
+        return ["STAGE_STATE_SCHEMA.md: no log-event table found to compare "
+                "against"], 0
+    bad = []
+    for ev in sorted(set(LOG_EVENT_FIELDS) | set(doc)):
+        code, d = LOG_EVENT_FIELDS.get(ev), doc.get(ev)
+        if code is None:
+            bad.append(f"STAGE_STATE_SCHEMA.md documents event `{ev}`, which "
+                       f"LOG_EVENT_FIELDS does not enforce")
+        elif d is None:
+            bad.append(f"LOG_EVENT_FIELDS enforces `{ev}`, which "
+                       f"STAGE_STATE_SCHEMA.md sec.7 does not document")
+        elif sorted(code) != sorted(d):
+            only_c = sorted(set(code) - set(d))
+            only_d = sorted(set(d) - set(code))
+            parts = []
+            if only_c:
+                parts.append("enforced but undocumented: " + ", ".join(only_c))
+            if only_d:
+                parts.append("documented but unenforced: " + ", ".join(only_d))
+            bad.append(f"`{ev}` field list differs - " + "; ".join(parts))
+    return bad, len(LOG_EVENT_FIELDS)
+
+
 def cmd_selftest(root: Path) -> int:
     """Check the framework's documentation against the framework's code."""
     bad = []
@@ -1658,6 +1862,8 @@ def cmd_selftest(root: Path) -> int:
     hdr_bad, hdr_skipped = _check_legacy_headers()
     fresh_bad, fresh_n = _check_extracted_freshness()
     bad += fresh_bad
+    lf_bad, lf_n = _check_log_field_table()
+    bad += lf_bad
 
     print("FRAMEWORK SELF-TEST")
     if hdr_skipped:
@@ -1679,6 +1885,8 @@ def cmd_selftest(root: Path) -> int:
               f"{len(guards.LEGACY_HEADERS)} recommended replacements exist")
     print(f"  extracted copies vs their specification: {fresh_n} source hash(es) "
           f"still match")
+    print(f"  log-event fields vs STAGE_STATE_SCHEMA.md sec.7: {lf_n} event(s) "
+          f"agree")
     return 0
 
 
