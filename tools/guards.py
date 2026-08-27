@@ -70,6 +70,29 @@ WARN_SUPPRESS = ("CONFIG_COMPILER_DISABLE_DEFAULT_ERRORS",
                  "CONFIG_COMPILER_DISABLE_GCC15_WARNINGS")
 
 
+# ESP-IDF ships the deprecation map itself, in 50 sdkconfig.rename files, and
+# the symbol universe in its Kconfig tree. tools/extract_kconfig.py turns both
+# into kconfig-migration.yaml. Nothing here is curated by hand, because a
+# hand-written list of removed symbols is wrong within one ESP-IDF release.
+MIGRATION_FILE = "kconfig-migration.yaml"
+_MIGRATION = None
+
+
+def load_migration():
+    global _MIGRATION
+    if _MIGRATION is None:
+        f = __import__("pathlib").Path(__file__).resolve().parent.parent / MIGRATION_FILE
+        try:
+            import yaml
+            d = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
+            _MIGRATION = {"renamed": d.get("renamed") or {},
+                          "valid": set(d.get("valid") or []),
+                          "idf_version": d.get("idf_version")}
+        except Exception:                              # noqa: BLE001
+            _MIGRATION = {"renamed": {}, "valid": set(), "idf_version": None}
+    return _MIGRATION
+
+
 def _f(guard, msg, cite, line=None):
     return {"guard": guard, "message": msg, "cite": cite, "line": line}
 
@@ -130,8 +153,10 @@ def g_kconfig_exists(path, text, ctx):
     CONFIG_ESP_TASK_WDT_TIMEOUT_S: the watchdog is quietly never configured.
     """
     known = ctx.get("kconfig_symbols")
-    if not known:
+    mig = load_migration()
+    if not known and not mig["valid"]:
         return []                       # cannot verify - say nothing rather than guess
+    known = known or set()
     defined_here = set(re.findall(r"#\s*define\s+(CONFIG_[A-Z0-9_]+)", text))
     out, seen = [], set()
     for m in re.finditer(r"\b(CONFIG_[A-Z0-9_]{2,})\b", text):
@@ -139,13 +164,41 @@ def g_kconfig_exists(path, text, ctx):
         if sym in known or sym in defined_here or sym in seen:
             continue
         seen.add(sym)
-        out.append(_f("kconfig-exists",
-                      f"{sym} is not present in any sdkconfig known to this project. "
-                      f"A CONFIG_ symbol that does not exist evaluates false and "
-                      f"disables the feature silently. Verify the spelling against "
-                      f"menuconfig - v4/v5-era names were widely renamed in v5 and v6.",
-                      "SECTION3 sec.2.2",
-                      _lineno(text, m.start())))
+        bare = sym[len("CONFIG_"):]
+        line = _lineno(text, m.start())
+
+        # Three distinct situations that all used to read the same. The
+        # deprecation map names the replacement, which is the difference between
+        # "this is wrong" and "this is wrong, use that".
+        new_name = mig["renamed"].get(bare)
+        if new_name:
+            out.append(_f("kconfig-exists",
+                          f"{sym} was renamed. ESP-IDF's own "
+                          f"sdkconfig.rename map gives CONFIG_{new_name}. The old "
+                          f"name is not a symbol any more, so it evaluates false "
+                          f"and disables the feature silently.",
+                          "SECTION3 sec.2.2", line))
+        elif mig["valid"] and bare not in mig["valid"]:
+            out.append(_f("kconfig-exists",
+                          f"{sym} is not a Kconfig symbol in the installed "
+                          f"ESP-IDF v{mig['idf_version']} tree, and has no entry "
+                          f"in its rename map. A CONFIG_ symbol that does not "
+                          f"exist evaluates false and disables the feature "
+                          f"silently - check the spelling against menuconfig.",
+                          "SECTION3 sec.2.2", line))
+        elif mig["valid"]:
+            out.append(_f("kconfig-exists",
+                          f"{sym} is a real ESP-IDF symbol but is absent from "
+                          f"every sdkconfig this project has. Its component is "
+                          f"most likely not in the build, so the symbol "
+                          f"evaluates false here.",
+                          "SECTION3 sec.2.2", line))
+        else:
+            out.append(_f("kconfig-exists",
+                          f"{sym} is not present in any sdkconfig known to this "
+                          f"project. A CONFIG_ symbol that does not exist "
+                          f"evaluates false and disables the feature silently.",
+                          "SECTION3 sec.2.2", line))
     return out
 
 
@@ -287,6 +340,56 @@ def g_idf_version_pin(path, text, ctx):
                           f"installed version a gate finding in its own right.",
                           "SECTION3 sec.6.2",
                           _lineno(text, m.start())))
+    return out
+
+
+# SECTION3 sec.2.2: CONFIG_COMPILER_ASSERT_NDEBUG_EVALUATE changed default to n
+# in v6.0, restoring standard C behaviour. Verified in the installed tree at
+# Kconfig:429. An assert() whose expression has a side effect stops performing
+# it in any build with NDEBUG - a silent runtime behaviour change the compiler
+# says nothing about. sec.2.2: "Audit every assertion before Stage 3."
+RE_ASSERT = re.compile(r"\b(?:configASSERT|assert)\s*\(")
+# Comparisons and pointer tests are the overwhelmingly common, side-effect-free
+# shape. What matters is a CALL inside the expression.
+RE_CALL_INSIDE = re.compile(r"\b(?!sizeof\b|if\b|while\b|for\b|return\b|switch\b)"
+                            r"[A-Za-z_]\w*\s*\(")
+
+
+def _balanced(text, start):
+    """The text between the parens opening at `start`, or None."""
+    depth, i = 0, start
+    while i < len(text):
+        if text[i] == "(":
+            depth += 1
+        elif text[i] == ")":
+            depth -= 1
+            if depth == 0:
+                return text[start + 1:i]
+        i += 1
+    return None
+
+
+def g_assert_ndebug(path, text, ctx):
+    """An assert() carrying a side effect stops performing it under NDEBUG."""
+    out = []
+    code = _strip_line_comments(text)
+    for m in RE_ASSERT.finditer(code):
+        inner = _balanced(code, m.end() - 1)
+        if inner is None:
+            continue
+        call = RE_CALL_INSIDE.search(inner)
+        if not call:
+            continue
+        out.append(_f("assert-ndebug",
+                      f"this assertion evaluates {call.group(0).rstrip('(').strip()}"
+                      f"(), and ESP-IDF v6.0 changed "
+                      f"CONFIG_COMPILER_ASSERT_NDEBUG_EVALUATE to default n. With "
+                      f"NDEBUG set the expression is no longer evaluated, so the "
+                      f"call never happens in that build and nothing reports it. "
+                      f"Move the call out of the assertion and assert on its "
+                      f"result.",
+                      "SECTION3 sec.2.2 (v6.0 system changes)",
+                      _lineno(code, m.start())))
     return out
 
 
@@ -486,6 +589,13 @@ def is_firmware_source(path):
     return not NONFIRMWARE_FILE.search(segs[-1].lower())
 
 
+def _is_source_or_sdkconfig(path):
+    """SECTION3 sec.2.2 requires sdkconfig to be committed and never hand-edited.
+    A v5.x sdkconfig carried into a v6.0 project holds symbols that no longer
+    exist, and menuconfig will not have removed them."""
+    return _is_source(path) or _is_sdkconfig(path)
+
+
 def _is_cmake(path):
     p = path.replace("\\", "/")
     segs = p.split("/")
@@ -516,12 +626,14 @@ def _is_sdkconfig(path):
 REGISTRY = [
     # id,             level,      applies,       fn,               implemented
     ("stack-unit",    "guard",    _is_source,    g_stack_unit,     True),
-    ("kconfig-exists", "guard",   _is_source,    g_kconfig_exists, True),
+    ("kconfig-exists", "guard",   _is_source_or_sdkconfig,
+                                                 g_kconfig_exists, True),
     ("core-pin",      "guard",    _is_source,    g_core_pin,       True),
     ("warn-suppress", "guard",    _is_sdkconfig, g_warn_suppress,  True),
     ("legacy-driver", "guard",    _is_source,    g_legacy_driver,  True),
     ("arduino-ban",   "guard",    _is_source,    g_arduino,        True),
     ("idf-version-pin", "guard",  _is_cmake,     g_idf_version_pin, True),
+    ("assert-ndebug",  "guard",    _is_source,    g_assert_ndebug,  True),
     # Hole 4 (verified): at "strict" this guard denies only at S4-S5, while
     # the design phase runs at S1-S3 - so it could never deny during the
     # work it exists to protect. At "guard" it warns at S1 and denies at

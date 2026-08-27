@@ -48,12 +48,13 @@ A denial is overridable through the normal permission flow. The reason text says
 | id | level | applies to | implemented |
 |---|---|---|---|
 | `stack-unit` | guard | C/C++ sources | ✅ |
-| `kconfig-exists` | guard | C/C++ sources | ✅ |
+| `kconfig-exists` | guard | C/C++ sources, `sdkconfig*` | ✅ |
 | `core-pin` | guard | C/C++ sources | ✅ |
 | `warn-suppress` | guard | `sdkconfig*` | ✅ |
 | `legacy-driver` | guard | C/C++ sources | ✅ |
 | `arduino-ban` | guard | C/C++ sources | ✅ |
 | `idf-version-pin` | guard | `CMakeLists.txt`, `*.cmake` | ✅ |
+| `assert-ndebug` | guard | C/C++ sources | ✅ |
 | `numeric-claim` | guard | markdown under `design/`, `hardware/`, `reliability/`, `tracking/pic-audit/dossiers/` | ✅ |
 | `evidence-path` | strict | — | ❌ not built |
 

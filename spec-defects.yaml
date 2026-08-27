@@ -322,6 +322,45 @@ defects:
       enabled. Same defect as the SECTION2 entry; recorded separately because
       the kconfig-exists guard cites line numbers per file.
 
+  - id: gcc-version
+    source: workflow-iot/WORKFLOW_SECTION3.md
+    lines: [232, 777, 1996, 1998, 1999]
+    class: wrong-reason
+    digest: false
+    says: >-
+      "Toolchain is GCC 15.1.0", and the sec.6.2 pinning table repeats it twice
+    correct: >-
+      ESP-IDF v6.0.2 uses GCC 15.2.0. tools/tools.json marks
+      esp-15.2.0_20251204 as the recommended xtensa-esp-elf version, and it is
+      the only toolchain installed. sec.6.2's own rule makes this a finding
+      against itself: "a document that pins one version while the workstation
+      runs another is itself a gate finding". A Dockerfile or CI image built to
+      the table would not match the workstation.
+
+  - id: brownout-lvl-sel
+    source: workflow-iot/WORKFLOW_SECTION5.md
+    lines: [104]
+    class: trap
+    digest: true
+    says: "check sdkconfig: CONFIG_ESP_BROWNOUT_DET_LVL_SEL=0 (2.43V +/- 0.05V for ESP32)"
+    correct: >-
+      The voltage is right and the symbol form is wrong. In v6.0.2 the brownout
+      level is a Kconfig choice, so the symbols are booleans -
+      CONFIG_ESP_BROWNOUT_DET_LVL_SEL_0 through _SEL_7, one of them =y. There is
+      no CONFIG_ESP_BROWNOUT_DET_LVL_SEL taking a value. Verified in
+      components/esp_hw_support/power_supply/port/esp32/Kconfig.power:15-42,
+      where SEL_0 is indeed labelled "2.43V +/- 0.05".
+
+      R-ESP-06 is an acceptance criterion, so an engineer applying it literally
+      greps for a symbol that cannot appear and either fails the criterion or
+      hand-writes a dead symbol into sdkconfig. The reference project here
+      carries CONFIG_ESP_BROWNOUT_DET_LVL_SEL_7=y - 2.80V, not 2.43V.
+
+      Worth knowing when citing the number: the Kconfig help says of these
+      levels, "The voltage levels here are estimates, more work needs to be done
+      to figure out the exact voltages of the brownout threshold levels." It is
+      ESP-IDF's estimate, not a datasheet guarantee.
+
 # Investigated and found NOT to be defects. Recorded so they are not re-raised.
 rejected:
   - id: nonatomic-counter

@@ -18,6 +18,7 @@ The directory structure mirrors the install target, so installation is a copy or
 | `MCP_SPEC.md` | — (reference only) | Evidence wiring: the two MCP servers, the Bash allowlist, build-log capture |
 | `spec-defects.yaml` | — (data, read by the digest) | Verified defects in the workflow specification itself |
 | `quality-attributes.yaml` | — (data, extracted) | Twelve-attribute vocabulary and the 44-edge conflict graph |
+| `kconfig-migration.yaml` | — (data, extracted) | 721 ESP-IDF symbol renames and 4174 valid symbols, cut from the installed tree |
 | `rsmr-matrix.yaml` | — (data, extracted) | SECTION 5 §7.1 matrix, 40 criteria × 5 stages, plus the debt ceiling |
 | `RSMR_SPEC.md` | — (reference only) | Stage obligations, deferral validity, and the §7 Totals defect |
 | `GATE_SPEC.md` | — (reference only) | Gate verdicts, the adversary, and the dossier |
@@ -117,7 +118,7 @@ See `STAGE_STATE_SCHEMA.md` §5 for the guard list and the raise/lower rules.
 | Property | Value |
 |---|---|
 | ESP-IDF | v6.0.2 |
-| Toolchain | GCC 15.1.0 (Xtensa and RISC-V) |
+| Toolchain | GCC 15.2.0 (Xtensa and RISC-V) — `tools.json` marks `esp-15.2.0_20251204` recommended for v6.0.2. SECTION 3 §2.2 and §6.2 both say 15.1.0; this line said so too until it was checked against the installed tree |
 | Primary targets | ESP32, ESP32-S3 |
 | FreeRTOS | IDF FreeRTOS, SMP, based on vanilla v10.5.1 |
 | Evidence tooling | `idf.py mcp-server` (Tools MCP), Espressif Documentation MCP, plus a narrow Bash allowlist for `size`, `size-components`, `coredump-info`, `monitor` |
@@ -245,6 +246,45 @@ RSMR-08: DEBT-002 revisits at S5, but this criterion becomes Mandatory at S4
 ```
 
 `RSMR_SPEC.md` carries the full matrix, the defect analysis, and the check boundaries.
+
+### Section 3 — migration, and configuration against the stage bar
+
+ESP-IDF v6.0 is a breaking release, and SECTION 3 teaches v5 idiom in four of its own samples. The risk is not that the agent invents something — it is that the agent copies the specification faithfully and is wrong.
+
+**The deprecation data is not curated.** A hand-written list of removed symbols is the stale-able fact invariant I2 warns against, and it would be wrong within one ESP-IDF release. ESP-IDF ships both halves already: 50 `sdkconfig.rename*` files mapping deprecated symbols to their replacements, and its Kconfig tree for what exists. `tools/extract_kconfig.py` turns them into `kconfig-migration.yaml` — **721 renames, 4174 symbols**, stamped with the IDF version so `selftest` catches an upgrade.
+
+Building that extractor took three passes, each caught by checking rather than assuming:
+
+| Assumed | Found |
+|---|---|
+| Symbols come from `config` declarations | 130 exist only via `select` — `ESP_COREDUMP_DATA_FORMAT_ELF` among them |
+| Kconfig files are named `Kconfig`, `.projbuild`, `.in` | ESP-IDF uses arbitrary suffixes — `Kconfig.power`, `Kconfig.app_rollback`. 190 rename targets looked absent |
+| Everything lives under `components/` | `COMPILER_ASSERT_NDEBUG_EVALUATE` and `COMPILER_DISABLE_GCC15_WARNINGS` are in the top-level `Kconfig` — both symbols the `warn-suppress` guard rests on |
+
+Each miss would have flagged valid symbols as invented.
+
+`kconfig-exists` now distinguishes three situations that used to read identically:
+
+```
+CONFIG_SW_COEXIST_ENABLE was renamed. ESP-IDF's own sdkconfig.rename map
+  gives CONFIG_ESP_COEX_SW_COEXIST_ENABLE.
+CONFIG_ESP32_TASK_WDT_TIMEOUT_S is not a Kconfig symbol in the installed
+  v6.0.2 tree, and has no entry in its rename map.
+CONFIG_ESP_COEX_SW_COEXIST_ENABLE is a real symbol but absent from every
+  sdkconfig this project has — its component is most likely not in the build.
+```
+
+It also reads `sdkconfig` now, not just C sources: §2.2 requires sdkconfig to be committed, and a v5.x file carried forward holds symbols v6.0 removed. On the reference project's 1615 symbols it is silent.
+
+**`assert-ndebug`** covers the one v6.0 system change the compiler cannot report. `CONFIG_COMPILER_ASSERT_NDEBUG_EVALUATE` now defaults to `n`, restoring standard C: the expression is not evaluated under `NDEBUG`. `assert(nvs_flash_init() == ESP_OK)` stops initialising in any release build, silently. The guard fires on a call inside the assertion and stays quiet on `assert(x > 0)`, `configASSERT(handle != NULL)` and `assert(sizeof(int) == 4)`.
+
+The rest of §2.2's v6.0 list earns no guard, by this framework's founding rule — *do not guard what the compiler already reports*. `wifi_provisioning` is gone from the tree and the removed `mbedtls_*` primitives no longer link; both are loud failures.
+
+### `config` — the stage bar for sdkconfig and partitions
+
+`stage_kernel.py config` reads what §2.2 makes conditional on stage: assertions enabled from S3, bootloader log silence from S4, `ota_0`+`ota_1` from S3, warning suppression forbidden always. All of it is silent when wrong — a missing OTA partition is a build that flashes and can never update itself.
+
+`config-symbols-real` runs first and checks the check: every symbol these rules name must exist in the installed tree. §2.2 asks for exactly that — *"Confirm both symbol names against the installed v6.0.2 Kconfig tree before wiring them into a CI check"* — and this is that CI check.
 
 ### Self-test — the framework checked against itself
 

@@ -33,6 +33,7 @@ try:
     import gates
     import design_check
     import rsmr
+    import idfconfig
 except ImportError:  # guards.py sits beside this file
     sys.path.insert(0, str(Path(__file__).resolve().parent))
 SCHEMA_VERSIONS_UNDERSTOOD = [1]
@@ -685,9 +686,21 @@ def collect_targets(root: Path, intent):
         tgt = data.get("target")
         if not tgt:
             continue
+        # project_description.json records config_file as an ABSOLUTE path to
+        # wherever the build ran. Copy or clone a project with its build
+        # directory intact and that path still points at the original machine,
+        # so every fact derived from sdkconfig - unicore, tick rate, PSRAM,
+        # warning suppression - would come from somebody else's project while
+        # reading as if it were this one. Accept it only from inside this tree.
         cfgp = Path(data.get("config_file") or (root / "sdkconfig"))
         if not cfgp.is_absolute():
             cfgp = (root / cfgp).resolve()
+        else:
+            try:
+                cfgp.resolve().relative_to(root.resolve())
+            except ValueError:
+                local = root / "sdkconfig"
+                cfgp = local if local.is_file() else Path("")
         entry = (_target_from_cfg(parse_sdkconfig(cfgp), cfgp, tgt,
                                   f"{bd.name}/project_description.json")
                  if cfgp.is_file() else
@@ -1704,6 +1717,38 @@ def cmd_rsmr_scorecard(root: Path) -> int:
     return 0
 
 
+def cmd_config(root: Path) -> int:
+    """SECTION3 sec.2.2 - sdkconfig and partition table against the stage bar."""
+    try:
+        state, _ = load_state(root)
+    except StateError as e:
+        print(f"cannot apply the config bar: {e}", file=sys.stderr)
+        return 2
+    # Build on demand rather than reading whatever happens to be there. The
+    # verdict must not depend on someone having run `cache` first - the gate
+    # context does the same, for the same reason.
+    targets = _gate_context(root, state).get("targets") or []
+    pkg = Path(__file__).resolve().parent.parent
+    findings = idfconfig.run(root, state, targets, pkg)
+    su = idfconfig.summarise(findings)
+    stage = (state.get("current") or {}).get("stage")
+    print(f"IDF CONFIG vs STAGE BAR   stage {stage}")
+    print(f"  machine-checked {su['machine_checked']} | refuted "
+          f"{su['machine_refuted']} | unverifiable {su['unverifiable']}")
+    for f in findings:
+        print(NL + f"  [{f['status']}] {f['check']}")
+        print(f"     {f['why']}")
+        for e in f["evidence"][:8]:
+            print(f"     - {e}")
+        for h in f["hints"][:4]:
+            print(f"     hint: {h}")
+    print(NL + "  These establish what sdkconfig and partitions.csv say. Whether "
+          "the resulting")
+    print("  image behaves correctly is a different question, and no "
+          "configuration file answers it.")
+    return 0
+
+
 def cmd_design_review(root: Path) -> int:
     """SECTION2 sec.8 design review - an intra-stage review moment.
 
@@ -1832,6 +1877,38 @@ def _check_extracted_freshness():
     here = Path(__file__).resolve().parent.parent
     bad = []
     checked = 0
+    # kconfig-migration.yaml is cut from the installed ESP-IDF rather than from a
+    # workflow document, so it is stamped with the IDF version instead of a file
+    # hash. An upgrade silently invalidates every symbol verdict built on it.
+    kf = here / "kconfig-migration.yaml"
+    if kf.is_file():
+        try:
+            import yaml
+            kd = yaml.safe_load(kf.read_text(encoding="utf-8")) or {}
+            recorded = str(kd.get("idf_version") or "")
+            live = None
+            idfp = os.environ.get("IDF_PATH")
+            if idfp:
+                vh = (Path(idfp) / "components" / "esp_common" / "include"
+                      / "esp_idf_version.h")
+                if vh.is_file():
+                    t = vh.read_text(encoding="utf-8", errors="ignore")
+                    got = [re.search(rf"#define\s+ESP_IDF_VERSION_{k}\s+(\d+)", t)
+                           for k in ("MAJOR", "MINOR", "PATCH")]
+                    if all(got):
+                        live = ".".join(m.group(1) for m in got)
+            if live and recorded and live != recorded:
+                bad.append(f"kconfig-migration.yaml was cut from ESP-IDF "
+                           f"v{recorded}, the installed tree is v{live} - "
+                           f"regenerate with tools/extract_kconfig.py")
+            elif live:
+                checked += 1
+        except Exception:                              # noqa: BLE001
+            bad.append("kconfig-migration.yaml did not parse")
+    else:
+        bad.append("kconfig-migration.yaml is absent - run "
+                   "tools/extract_kconfig.py")
+
     for name, fields in (("rsmr-matrix.yaml",
                           [("source", "source_sha256"),
                            ("debt_source", "debt_source_sha256")]),
@@ -1989,7 +2066,8 @@ def main() -> int:
     ap.add_argument("command",
                 choices=["detect", "cache", "check", "digest", "guard", "gate",
                          "design", "spec-stamp", "design-review",
-                         "rsmr", "rsmr-scorecard", "selftest"])
+                         "rsmr", "rsmr-scorecard", "config",
+                         "selftest"])
     ap.add_argument("-C", "--directory", default=".", help="project root")
     a = ap.parse_args()
     root = Path(a.directory).resolve()
@@ -1999,6 +2077,7 @@ def main() -> int:
             "spec-stamp": cmd_spec_stamp,
             "design-review": cmd_design_review,
             "rsmr": cmd_rsmr, "rsmr-scorecard": cmd_rsmr_scorecard,
+            "config": cmd_config,
             "selftest": cmd_selftest}[a.command](root)
 
 
